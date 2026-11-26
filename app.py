@@ -237,4 +237,45 @@ if "market_df" in st.session_state:
                     )
                     st.session_state["macro_result"] = ask_gemini(gemini_key, prompt_macro)
 
-            if "macro_result" in st.session_state:
+           if "macro_result" in st.session_state:
+                st.markdown(st.session_state["macro_result"])
+
+            st.divider()
+
+            st.subheader("2. Deep-Dive Script & Audience Comment Analysis")
+            video_options = {f"Top {r['Top']}: {r['Title']} ({r['Views']:,} views)": r["Video ID"] for _, r in df.iterrows()}
+            selected_label = st.selectbox("Select a video to analyze:", list(video_options.keys()))
+            selected_vid_id = video_options[selected_label]
+
+            if st.button("Analyze Selected Video (Transcript + Comments)"):
+                with st.spinner("Fetching transcript, comments, and analyzing structure..."):
+                    transcript_text = ""
+                    try:
+                        ytt_api = YouTubeTranscriptApi()
+                        transcript_list = ytt_api.fetch(selected_vid_id)
+                        transcript_text = " ".join([t.text for t in transcript_list])[:12000]
+                    except Exception:
+                        transcript_text = "(No transcript available / Silent ASMR vlog)."
+
+                    comments_text = ""
+                    try:
+                        youtube = build("youtube", "v3", developerKey=yt_key)
+                        c_res = youtube.commentThreads().list(
+                            part="snippet", videoId=selected_vid_id,
+                            order="relevance", maxResults=30
+                        ).execute()
+                        comments_list = [
+                            item["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
+                            for item in c_res.get("items", [])
+                        ]
+                        comments_text = "\n- ".join(comments_list)
+                    except Exception:
+                        comments_text = "(Comments disabled)."
+
+                    prompt_micro = (
+                        f"Analyze this YouTube video for Chuc Nguyen's Little Life production team:\n"
+                        f"- Title: {selected_label}\n"
+                        f"- Transcript: {transcript_text}\n"
+                        f"- Top US Viewer Comments: {comments_text}\n\n"
+                        "Respond in Vietnamese with 4 clear sections:\n"
+                        "1. Cấu trúc & Nh
