@@ -6,31 +6,28 @@ import requests
 from datetime import datetime, timedelta, timezone
 
 st.set_page_config(page_title="Camxi - YouTube Market & Topic AI", layout="wide")
-st.title("🎯 Hệ Thống Nghiên Cứu Thị Trường & Bóc Tách Chủ Đề YouTube")
+st.title("YouTube Market Research & AI Topic Analyzer")
 
 default_yt_key = st.secrets.get("YOUTUBE_API_KEY", "")
 default_gemini_key = st.secrets.get("GEMINI_API_KEY", "")
 
 VN_MARKERS = [
     "vietnam", "viet nam", "hanoi", "ha noi", "saigon", "sai gon",
-    "ho chi minh", "da nang", "dalat", "da lat", "🇻🇳", "việt nam"
+    "ho chi minh", "da nang", "dalat", "da lat", "vietnamese"
 ]
 CN_MARKERS = [
     "china", "shenzhen", "shanghai", "beijing", "guangzhou", "chengdu",
-    "hangzhou", "chongqing", "🇨🇳", "taobao", "temu", "trung quốc"
+    "hangzhou", "chongqing", "taobao", "temu", "chinese"
 ]
 
 def ask_gemini(api_key, prompt_text):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
-    payload = {
-        "contents": [{"parts": [{"text": prompt_text}]}]
-    }
+    payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
     response = requests.post(url, headers=headers, json=payload, timeout=60)
     if response.status_code == 200:
-        data = response.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    return f"⚠️ Lỗi kết nối Gemini API ({response.status_code}): {response.text}"
+        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+    return f"API Error ({response.status_code}): {response.text}"
 
 def detect_origin(snippet):
     country_code = snippet.get("country", "").upper()
@@ -40,9 +37,9 @@ def detect_origin(snippet):
         snippet.get("customUrl", "")
     ).lower()
     if country_code == "VN" or any(m in text_blob for m in VN_MARKERS):
-        return "🇻🇳 Việt Nam"
+        return "VN - Vietnam"
     if country_code in ["CN", "HK", "TW"] or any(m in text_blob for m in CN_MARKERS):
-        return "🇨🇳 Trung Quốc"
+        return "CN - China"
     return None
 
 def is_english_title(title):
@@ -64,34 +61,34 @@ def resolve_channel_id(youtube, raw_input):
     return res["items"][0]["id"] if res.get("items") else None
 
 with st.sidebar:
-    st.header("⚙️ Cấu Hình API & Bộ Lọc")
+    st.header("API & Filter Settings")
     yt_key = st.text_input("YouTube API Key", value=default_yt_key, type="password")
-    gemini_key = st.text_input("Gemini API Key (Cho tab Phân tích AI)", value=default_gemini_key, type="password")
+    gemini_key = st.text_input("Gemini API Key", value=default_gemini_key, type="password")
 
-    st.subheader("1. Kênh đối thủ chuẩn (VN / TQ)")
+    st.subheader("1. Seed Channels (VN / CN)")
     default_competitors = (
         "@Ting-DailylifeinChina\n"
         "@HueHueLife\n"
         "@LinhLinhLife\n"
         "@ThusLife"
     )
-    competitor_handles = st.text_area("Handle / Link kênh đối thủ", value=default_competitors, height=110)
+    competitor_handles = st.text_area("Competitor Handles", value=default_competitors, height=110)
 
-    st.subheader("2. Bộ lọc thị trường Mỹ")
+    st.subheader("2. US Market Filters")
     niche_queries = st.text_input(
-        "Từ khóa ngách",
+        "Niche Keywords",
         value='("tiny apartment" | "budget makeover" | "solo living" | "small apartment") (Vietnam | China | "in Vietnam" | "in China")'
     )
-    strict_origin = st.checkbox("Chỉ lấy creator VN hoặc TQ", value=True)
-    days_ago = st.slider("Đăng trong vòng (ngày qua)", 1, 30, 7)
-    top_n = st.number_input("Số video xếp hạng", 10, 50, 50)
-    run_btn = st.button("🚀 Quét Dữ Liệu Thị Trường", type="primary", use_container_width=True)
+    strict_origin = st.checkbox("Only VN or CN creators", value=True)
+    days_ago = st.slider("Published within (days)", 1, 30, 7)
+    top_n = st.number_input("Top N videos", 10, 50, 50)
+    run_btn = st.button("Scan Market Data", type="primary", use_container_width=True)
 
 if run_btn:
     if not yt_key:
-        st.error("⚠️ Vui lòng nhập YouTube API Key!")
+        st.error("Please enter your YouTube API Key!")
     else:
-        with st.spinner("Đang quét Top video từ creator VN & TQ đánh thị trường Mỹ..."):
+        with st.spinner("Scanning VN & CN creators targeting US market..."):
             try:
                 youtube = build("youtube", "v3", developerKey=yt_key)
                 cutoff_dt = datetime.now(timezone.utc) - timedelta(days=days_ago)
@@ -127,7 +124,7 @@ if run_btn:
                         all_video_ids.add(item["id"]["videoId"])
 
                 if not all_video_ids:
-                    st.warning("Không tìm thấy video phù hợp. Hãy thử tăng số ngày lên 14 hoặc 30 ngày.")
+                    st.warning("No matching videos found. Try increasing days to 14 or 30.")
                 else:
                     vid_list = list(all_video_ids)
                     video_details = []
@@ -142,7 +139,7 @@ if run_btn:
                         for c in c_res.get("items", []):
                             origin = detect_origin(c["snippet"])
                             if not origin and c["id"] in seed_channel_ids:
-                                origin = "🇻🇳/🇨🇳 Kênh mẫu"
+                                origin = "VN/CN Seed"
                             channel_meta[c["id"]] = {
                                 "subs": max(int(c["statistics"].get("subscriberCount", 1)), 1),
                                 "origin": origin
@@ -160,9 +157,9 @@ if run_btn:
                         if not origin:
                             vid_text = (v["snippet"]["title"] + " " + v["snippet"].get("description", "")).lower()
                             if any(m in vid_text for m in VN_MARKERS):
-                                origin = "🇻🇳 Việt Nam"
+                                origin = "VN - Vietnam"
                             elif any(m in vid_text for m in CN_MARKERS):
-                                origin = "🇨🇳 Trung Quốc"
+                                origin = "CN - China"
                         if strict_origin and not origin:
                             continue
 
@@ -175,45 +172,45 @@ if run_btn:
                         rows.append({
                             "Video ID": v["id"],
                             "Thumbnail": v["snippet"]["thumbnails"]["medium"]["url"],
-                            "Tiêu đề Video": v["snippet"]["title"],
-                            "Kênh": v["snippet"]["channelTitle"],
-                            "Xuất xứ": origin if origin else "Khác",
+                            "Title": v["snippet"]["title"],
+                            "Channel": v["snippet"]["channelTitle"],
+                            "Origin": origin if origin else "Other",
                             "Subscribers": subs,
-                            "Lượt xem": views,
-                            "VPH TB": round(views / hours_live, 1),
-                            "Đột phá (View/Sub)": round(views / subs, 2),
-                            "Tương tác (%)": round(((likes + comments) / max(views, 1)) * 100, 2),
-                            "Ngày đăng": v["snippet"]["publishedAt"][:10],
+                            "Views": views,
+                            "VPH": round(views / hours_live, 1),
+                            "Outlier (View/Sub)": round(views / subs, 2),
+                            "Engagement (%)": round(((likes + comments) / max(views, 1)) * 100, 2),
+                            "Published": v["snippet"]["publishedAt"][:10],
                             "Link": f"https://www.youtube.com/watch?v={v['id']}"
                         })
 
                     if rows:
-                        df = pd.DataFrame(rows).sort_values(by="Lượt xem", ascending=False).head(int(top_n)).reset_index(drop=True)
+                        df = pd.DataFrame(rows).sort_values(by="Views", ascending=False).head(int(top_n)).reset_index(drop=True)
                         df.insert(0, "Top", df.index + 1)
                         st.session_state["market_df"] = df
                         st.session_state.pop("macro_result", None)
                         st.session_state.pop("micro_result", None)
                     else:
-                        st.warning("Chưa có video đạt đủ bộ lọc trong khoảng thời gian này.")
+                        st.warning("No videos matched all filters in this timeframe.")
             except Exception as e:
-                st.error(f"Lỗi quét dữ liệu: {e}")
+                st.error(f"Error: {e}")
 
 if "market_df" in st.session_state:
     df = st.session_state["market_df"]
-    tab1, tab2 = st.tabs(["📊 Bảng Xếp Hạng Top Video", "🧠 AI Phân Tích Chủ Đề & Bóc Tách Kịch Bản"])
+    tab1, tab2 = st.tabs(["Top Videos Ranking", "AI Topic & Script Analyzer"])
 
     with tab1:
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Video VN/TQ -> US", f"{len(df)} video")
-        c2.metric("Lượt xem trung bình", f"{int(df['Lượt xem'].mean()):,}")
-        c3.metric("VPH trung bình cao nhất", f"{df['VPH TB'].max():,} /h")
-        c4.metric("Đột phá cao nhất", f"{df['Đột phá (View/Sub)'].max()}x")
+        c1.metric("Videos Found", f"{len(df)}")
+        c2.metric("Avg Views", f"{int(df['Views'].mean()):,}")
+        c3.metric("Max VPH", f"{df['VPH'].max():,} /h")
+        c4.metric("Max Outlier", f"{df['Outlier (View/Sub)'].max()}x")
 
         st.dataframe(
             df.drop(columns=["Video ID"]),
             column_config={
-                "Thumbnail": st.column_config.ImageColumn("Ảnh bìa", width="medium"),
-                "Link": st.column_config.LinkColumn("Xem Video", display_text="Mở YouTube")
+                "Thumbnail": st.column_config.ImageColumn("Thumbnail", width="medium"),
+                "Link": st.column_config.LinkColumn("Watch", display_text="Open")
             },
             use_container_width=True,
             height=750
@@ -221,31 +218,23 @@ if "market_df" in st.session_state:
 
     with tab2:
         if not gemini_key:
-            st.warning("⚠️ Bạn cần nhập **Gemini API Key** ở thanh bên trái (hoặc lưu trong Secrets) để kích hoạt tính năng phân tích AI.")
+            st.warning("Please enter your Gemini API Key in the sidebar or Secrets.")
         else:
-            st.subheader("1️⃣ Tổng Hợp Xu Hướng Tuyến Đề Đang Lên (Từ Toàn Bộ Danh Sách)")
-            if st.button("✨ Phân Tích Xu Hướng Chủ Đề Toàn Thị Trường"):
-                with st.spinner("AI đang đọc tiêu đề, chỉ số view và gom nhóm tuyến đề..."):
+            st.subheader("1. Macro Topic Trends (All Top Videos)")
+            if st.button("Analyze Market Topic Trends"):
+                with st.spinner("AI is clustering topics and identifying winning pillars..."):
                     titles_summary = "\n".join([
-                        f"- {r['Tiêu đề Video']} | Kênh: {r['Kênh']} | View: {r['Lượt xem']:,} | View/Sub: {r['Đột phá (View/Sub)']}x"
+                        f"- {r['Title']} | Channel: {r['Channel']} | Views: {r['Views']:,} | Outlier: {r['Outlier (View/Sub)']}x"
                         for _, r in df.iterrows()
                     ])
-                    prompt_macro = f"""
-                    Dưới đây là danh sách các video YouTube mới của creator Việt Nam và Trung Quốc đánh thị trường người xem Hoa Kỳ trong ngách sống độc lập / căn hộ nhỏ / cải tạo tiết kiệm:
-                    {titles_summary}
-
-                    Hãy phân tích theo đúng tư duy phát triển kênh YouTube:
-                    1. Gom các video trên thành 3-5 Trụ cột chủ đề (Content Pillars) chính đang kéo view tốt nhất tuần này và chỉ ra vì sao chúng hiệu quả.
-                    2. Trích xuất các "Ngòi nổ" (Triggers) và từ khóa/con số đắt giá xuất hiện trong các tiêu đề có tỷ lệ View/Sub cao.
-                    3. Đề xuất 5 ý tưởng tiêu đề tiếng Anh (kèm dịch nghĩa tiếng Việt) tối ưu nhất để triển khai ngay cho kênh Chuc Nguyen's Little Life.
-                    """
+                    prompt_macro = (
+                        "Analyze these recent YouTube videos from Vietnamese and Chinese creators targeting US viewers in the solo living / tiny apartment / budget makeover niche:\n"
+                        + titles_summary +
+                        "\n\nRespond in Vietnamese with 3 clear sections:\n"
+                        "1. Gom nhóm thành 3-5 Trụ cột chủ đề (Content Pillars) đang kéo view tốt nhất tuần này và lý do hiệu quả.\n"
+                        "2. Trích xuất các từ khóa, con số và ngòi nổ tâm lý (Triggers) đắt giá trong tiêu đề có hệ số Outlier cao.\n"
+                        "3. Đề xuất 5 ý tưởng tiêu đề tiếng Anh (kèm dịch tiếng Việt) tối ưu nhất để quay ngay cho kênh Chuc Nguyen's Little Life."
+                    )
                     st.session_state["macro_result"] = ask_gemini(gemini_key, prompt_macro)
 
-            if "macro_result" in st.session_state:
-                st.markdown(st.session_state["macro_result"])
-
-            st.divider()
-
-            st.subheader("2️⃣ Bóc Tách Sâu Bố Cục Kịch Bản & Nhu Cầu Khán Giả Từng Video")
-            video_options = {f"Top {r['Top']}: {r['Tiêu đề Video']} ({r['Lượt xem']:,} views)": r["Video ID"] for _, r in df.iterrows()}
-            selected_label = st.selectbox("Chọn 1 video muốn mổ xẻ chi tiết
+            if "macro_result" in st
