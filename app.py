@@ -21,7 +21,7 @@ CN_MARKERS = [
 ]
 
 def ask_gemini(api_key, prompt_text):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
     response = requests.post(url, headers=headers, json=payload, timeout=60)
