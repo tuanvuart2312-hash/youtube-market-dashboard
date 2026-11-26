@@ -237,4 +237,4 @@ if "market_df" in st.session_state:
                     )
                     st.session_state["macro_result"] = ask_gemini(gemini_key, prompt_macro)
 
-            if "macro_result" in st
+            if "macro_result" in st.session_state:
