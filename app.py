@@ -30,8 +30,7 @@ def ask_gemini(api_key, prompt_text):
     if response.status_code == 200:
         data = response.json()
         return data["candidates"][0]["content"]["parts"][0]["text"]
-    else:
-        return f"⚠️ Lỗi kết nối Gemini API ({response.status_code}): {response.text}"
+    return f"⚠️ Lỗi kết nối Gemini API ({response.status_code}): {response.text}"
 
 def detect_origin(snippet):
     country_code = snippet.get("country", "").upper()
@@ -150,4 +149,103 @@ if run_btn:
                             }
 
                     now_utc = datetime.now(timezone.utc)
-                    rows
+                    rows = []
+                    for v in video_details:
+                        pub_dt = datetime.fromisoformat(v["snippet"]["publishedAt"].replace("Z", "+00:00"))
+                        if pub_dt < cutoff_dt or not is_english_title(v["snippet"]["title"]):
+                            continue
+                        cid = v["snippet"]["channelId"]
+                        meta = channel_meta.get(cid, {"subs": 1, "origin": None})
+                        origin = meta["origin"]
+                        if not origin:
+                            vid_text = (v["snippet"]["title"] + " " + v["snippet"].get("description", "")).lower()
+                            if any(m in vid_text for m in VN_MARKERS):
+                                origin = "🇻🇳 Việt Nam"
+                            elif any(m in vid_text for m in CN_MARKERS):
+                                origin = "🇨🇳 Trung Quốc"
+                        if strict_origin and not origin:
+                            continue
+
+                        views = int(v["statistics"].get("viewCount", 0))
+                        likes = int(v["statistics"].get("likeCount", 0))
+                        comments = int(v["statistics"].get("commentCount", 0))
+                        subs = meta["subs"]
+                        hours_live = max((now_utc - pub_dt).total_seconds() / 3600, 1)
+
+                        rows.append({
+                            "Video ID": v["id"],
+                            "Thumbnail": v["snippet"]["thumbnails"]["medium"]["url"],
+                            "Tiêu đề Video": v["snippet"]["title"],
+                            "Kênh": v["snippet"]["channelTitle"],
+                            "Xuất xứ": origin if origin else "Khác",
+                            "Subscribers": subs,
+                            "Lượt xem": views,
+                            "VPH TB": round(views / hours_live, 1),
+                            "Đột phá (View/Sub)": round(views / subs, 2),
+                            "Tương tác (%)": round(((likes + comments) / max(views, 1)) * 100, 2),
+                            "Ngày đăng": v["snippet"]["publishedAt"][:10],
+                            "Link": f"https://www.youtube.com/watch?v={v['id']}"
+                        })
+
+                    if rows:
+                        df = pd.DataFrame(rows).sort_values(by="Lượt xem", ascending=False).head(int(top_n)).reset_index(drop=True)
+                        df.insert(0, "Top", df.index + 1)
+                        st.session_state["market_df"] = df
+                        st.session_state.pop("macro_result", None)
+                        st.session_state.pop("micro_result", None)
+                    else:
+                        st.warning("Chưa có video đạt đủ bộ lọc trong khoảng thời gian này.")
+            except Exception as e:
+                st.error(f"Lỗi quét dữ liệu: {e}")
+
+if "market_df" in st.session_state:
+    df = st.session_state["market_df"]
+    tab1, tab2 = st.tabs(["📊 Bảng Xếp Hạng Top Video", "🧠 AI Phân Tích Chủ Đề & Bóc Tách Kịch Bản"])
+
+    with tab1:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Video VN/TQ -> US", f"{len(df)} video")
+        c2.metric("Lượt xem trung bình", f"{int(df['Lượt xem'].mean()):,}")
+        c3.metric("VPH trung bình cao nhất", f"{df['VPH TB'].max():,} /h")
+        c4.metric("Đột phá cao nhất", f"{df['Đột phá (View/Sub)'].max()}x")
+
+        st.dataframe(
+            df.drop(columns=["Video ID"]),
+            column_config={
+                "Thumbnail": st.column_config.ImageColumn("Ảnh bìa", width="medium"),
+                "Link": st.column_config.LinkColumn("Xem Video", display_text="Mở YouTube")
+            },
+            use_container_width=True,
+            height=750
+        )
+
+    with tab2:
+        if not gemini_key:
+            st.warning("⚠️ Bạn cần nhập **Gemini API Key** ở thanh bên trái (hoặc lưu trong Secrets) để kích hoạt tính năng phân tích AI.")
+        else:
+            st.subheader("1️⃣ Tổng Hợp Xu Hướng Tuyến Đề Đang Lên (Từ Toàn Bộ Danh Sách)")
+            if st.button("✨ Phân Tích Xu Hướng Chủ Đề Toàn Thị Trường"):
+                with st.spinner("AI đang đọc tiêu đề, chỉ số view và gom nhóm tuyến đề..."):
+                    titles_summary = "\n".join([
+                        f"- {r['Tiêu đề Video']} | Kênh: {r['Kênh']} | View: {r['Lượt xem']:,} | View/Sub: {r['Đột phá (View/Sub)']}x"
+                        for _, r in df.iterrows()
+                    ])
+                    prompt_macro = f"""
+                    Dưới đây là danh sách các video YouTube mới của creator Việt Nam và Trung Quốc đánh thị trường người xem Hoa Kỳ trong ngách sống độc lập / căn hộ nhỏ / cải tạo tiết kiệm:
+                    {titles_summary}
+
+                    Hãy phân tích theo đúng tư duy phát triển kênh YouTube:
+                    1. Gom các video trên thành 3-5 Trụ cột chủ đề (Content Pillars) chính đang kéo view tốt nhất tuần này và chỉ ra vì sao chúng hiệu quả.
+                    2. Trích xuất các "Ngòi nổ" (Triggers) và từ khóa/con số đắt giá xuất hiện trong các tiêu đề có tỷ lệ View/Sub cao.
+                    3. Đề xuất 5 ý tưởng tiêu đề tiếng Anh (kèm dịch nghĩa tiếng Việt) tối ưu nhất để triển khai ngay cho kênh Chuc Nguyen's Little Life.
+                    """
+                    st.session_state["macro_result"] = ask_gemini(gemini_key, prompt_macro)
+
+            if "macro_result" in st.session_state:
+                st.markdown(st.session_state["macro_result"])
+
+            st.divider()
+
+            st.subheader("2️⃣ Bóc Tách Sâu Bố Cục Kịch Bản & Nhu Cầu Khán Giả Từng Video")
+            video_options = {f"Top {r['Top']}: {r['Tiêu đề Video']} ({r['Lượt xem']:,} views)": r["Video ID"] for _, r in df.iterrows()}
+            selected_label = st.selectbox("Chọn 1 video muốn mổ xẻ chi tiết
