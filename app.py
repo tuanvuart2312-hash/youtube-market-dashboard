@@ -8,7 +8,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 st.set_page_config(
-    page_title="CAMXI Media - Nghiên Cứu Thị Trường YouTube",
+    page_title="CAMXI Media - Nghiên Cứu & So Sánh Kênh YouTube",
     page_icon="🍊",
     layout="wide"
 )
@@ -93,9 +93,9 @@ st.markdown(f"""
     <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px;">
         <div style="flex: 1.2; min-width: 280px; padding-bottom: 16px;">
             <p class="camxi-title">🍊 CAMXI MARKET INTELLIGENCE</p>
-            <p class="camxi-subtitle">Hệ Thống Theo Dõi Đối Thủ & Bóc Tách Chủ Đề YouTube Thị Trường Mỹ</p>
+            <p class="camxi-subtitle">Hệ Thống Theo Dõi Đối Thủ, So Sánh Kênh Nhà & Bóc Tách Chủ Đề YouTube</p>
             <span style="background:#2E4C3B; color:#FAF6F0; padding:4px 12px; border-radius:20px; font-size:12px; font-weight:600;">
-                Creator VN & Trung Quốc ➔ Khán Giả US
+                Creator VN & Trung Quốc ➔ Khán Giả US | Benchmark Camxi
             </span>
         </div>
         <div style="flex: 1.8; min-width: 320px; text-align: right;">
@@ -199,6 +199,13 @@ with st.sidebar:
         yt_key = st.text_input("YouTube API Key", value=default_yt_key, type="password")
         gemini_key = st.text_input("Gemini API Key (Tùy chọn)", value=default_gemini_key, type="password")
 
+    st.subheader("🏠 Kênh Của Tôi (So Sánh Benchmark)")
+    default_my_channels = (
+        "https://www.youtube.com/@ChucNguyenLittleLife\n"
+        "https://www.youtube.com/@AnThusDiary"
+    )
+    my_channel_handles = st.text_area("Link / Handle kênh nhà", value=default_my_channels, height=75)
+
     st.subheader("1️⃣ Kênh Đối Thủ Theo Dõi")
     default_competitors = (
         "@Ting-DailylifeinChina\n"
@@ -206,7 +213,7 @@ with st.sidebar:
         "@LinhLinhLife\n"
         "@ThusLife"
     )
-    competitor_handles = st.text_area("Danh sách Handle kênh (VN / TQ)", value=default_competitors, height=105)
+    competitor_handles = st.text_area("Danh sách Handle kênh đối thủ (VN / TQ)", value=default_competitors, height=100)
 
     st.subheader("2️⃣ Bộ Lọc Thị Trường Mỹ")
     niche_queries = st.text_input(
@@ -216,25 +223,43 @@ with st.sidebar:
     strict_origin = st.checkbox("Chỉ lọc creator Việt Nam & Trung Quốc", value=True)
     days_ago = st.slider("Video đăng trong (ngày qua)", 1, 30, 7)
     top_n = st.number_input("Số lượng video xếp hạng", 10, 50, 50)
-    run_btn = st.button("🚀 Quét Dữ Liệu Ngay", type="primary", use_container_width=True)
+    run_btn = st.button("🚀 Quét & So Sánh Dữ Liệu", type="primary", use_container_width=True)
 
 if run_btn:
     if not yt_key:
         st.error("⚠️ Vui lòng mở mục 'Cài đặt API Key' ở thanh bên trái và nhập YouTube API Key!")
     else:
-        with st.spinner("Đang thu thập dữ liệu video mới nhất từ thị trường Mỹ..."):
+        with st.spinner("Đang thu thập dữ liệu video kênh nhà & đối thủ từ thị trường Mỹ..."):
             try:
                 youtube = build("youtube", "v3", developerKey=yt_key)
                 cutoff_dt = datetime.now(timezone.utc) - timedelta(days=days_ago)
                 published_after = cutoff_dt.isoformat()
                 all_video_ids = set()
-                my_channel_id = resolve_channel_id(youtube, "@ChucNguyenLittleLife")
 
+                # 1. Resolve My Channels
+                my_lines = [line.strip() for line in my_channel_handles.splitlines() if line.strip()]
+                my_channel_ids = []
+                for mh in my_lines:
+                    mcid = resolve_channel_id(youtube, mh)
+                    if mcid:
+                        my_channel_ids.append(mcid)
+                        ch_info = youtube.channels().list(part="contentDetails", id=mcid).execute()
+                        if ch_info.get("items"):
+                            uploads_id = ch_info["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+                            pl_items = youtube.playlistItems().list(
+                                part="snippet,contentDetails", playlistId=uploads_id, maxResults=15
+                            ).execute()
+                            for item in pl_items.get("items", []):
+                                pub_dt = datetime.fromisoformat(item["snippet"]["publishedAt"].replace("Z", "+00:00"))
+                                if pub_dt >= cutoff_dt:
+                                    all_video_ids.add(item["contentDetails"]["videoId"])
+
+                # 2. Resolve Competitor Seed Channels
                 handles = [line.strip() for line in competitor_handles.splitlines() if line.strip()]
                 seed_channel_ids = []
                 for h in handles:
                     cid = resolve_channel_id(youtube, h)
-                    if cid and cid != my_channel_id:
+                    if cid and cid not in my_channel_ids:
                         seed_channel_ids.append(cid)
                         ch_info = youtube.channels().list(part="contentDetails", id=cid).execute()
                         if ch_info.get("items"):
@@ -247,6 +272,7 @@ if run_btn:
                                 if pub_dt >= cutoff_dt:
                                     all_video_ids.add(item["contentDetails"]["videoId"])
 
+                # 3. Search US Market Niche
                 search_res = youtube.search().list(
                     part="id,snippet", q=niche_queries, type="video",
                     regionCode="US", relevanceLanguage="en",
@@ -254,8 +280,7 @@ if run_btn:
                 ).execute()
 
                 for item in search_res.get("items", []):
-                    if item["snippet"]["channelId"] != my_channel_id:
-                        all_video_ids.add(item["id"]["videoId"])
+                    all_video_ids.add(item["id"]["videoId"])
 
                 if not all_video_ids:
                     st.warning("Chưa tìm thấy video phù hợp. Hãy thử kéo thanh thời gian lên 14 hoặc 30 ngày.")
@@ -266,27 +291,37 @@ if run_btn:
                         v_res = youtube.videos().list(part="snippet,statistics", id=",".join(vid_list[i:i+50])).execute()
                         video_details.extend(v_res.get("items", []))
 
-                    c_ids = list(set([v["snippet"]["channelId"] for v in video_details]))
+                    c_ids = list(set([v["snippet"]["channelId"] for v in video_details] + my_channel_ids))
                     channel_meta = {}
                     for i in range(0, len(c_ids), 50):
                         c_res = youtube.channels().list(part="snippet,statistics", id=",".join(c_ids[i:i+50])).execute()
                         for c in c_res.get("items", []):
-                            origin = detect_origin(c["snippet"])
+                            is_mine = c["id"] in my_channel_ids
+                            origin = "🍊 Kênh Nhà (Camxi)" if is_mine else detect_origin(c["snippet"])
                             if not origin and c["id"] in seed_channel_ids:
                                 origin = "🇻🇳/🇨🇳 Kênh mẫu"
                             channel_meta[c["id"]] = {
+                                "title": c["snippet"].get("title", ""),
                                 "subs": max(int(c["statistics"].get("subscriberCount", 1)), 1),
-                                "origin": origin
+                                "total_views": int(c["statistics"].get("viewCount", 0)),
+                                "video_count": int(c["statistics"].get("videoCount", 0)),
+                                "origin": origin,
+                                "is_mine": is_mine
                             }
 
                     now_utc = datetime.now(timezone.utc)
                     rows = []
                     for v in video_details:
                         pub_dt = datetime.fromisoformat(v["snippet"]["publishedAt"].replace("Z", "+00:00"))
-                        if pub_dt < cutoff_dt or not is_english_title(v["snippet"]["title"]):
-                            continue
                         cid = v["snippet"]["channelId"]
-                        meta = channel_meta.get(cid, {"subs": 1, "origin": None})
+                        meta = channel_meta.get(cid, {"subs": 1, "origin": None, "is_mine": False})
+                        is_mine = meta["is_mine"]
+
+                        if pub_dt < cutoff_dt:
+                            continue
+                        if not is_mine and not is_english_title(v["snippet"]["title"]):
+                            continue
+
                         origin = meta["origin"]
                         if not origin:
                             vid_text = (v["snippet"]["title"] + " " + v["snippet"].get("description", "")).lower()
@@ -294,7 +329,7 @@ if run_btn:
                                 origin = "🇻🇳 Việt Nam"
                             elif any(m in vid_text for m in CN_MARKERS):
                                 origin = "🇨🇳 Trung Quốc"
-                        if strict_origin and not origin:
+                        if strict_origin and not origin and not is_mine:
                             continue
 
                         views = int(v["statistics"].get("viewCount", 0))
@@ -306,6 +341,7 @@ if run_btn:
 
                         rows.append({
                             "Video ID": v["id"],
+                            "Phân loại": "🍊 Kênh Nhà" if is_mine else "⚔️ Đối thủ",
                             "Ảnh bìa": v["snippet"]["thumbnails"]["medium"]["url"],
                             "Tiêu đề Video": title_str,
                             "Nhóm Chủ Đề": classify_topic(title_str),
@@ -321,40 +357,59 @@ if run_btn:
                         })
 
                     if rows:
-                        df = pd.DataFrame(rows).sort_values(by="Lượt xem", ascending=False).head(int(top_n)).reset_index(drop=True)
+                        full_df = pd.DataFrame(rows).sort_values(by="Lượt xem", ascending=False).reset_index(drop=True)
+                        # Always keep all My Channel videos + top N overall
+                        my_df = full_df[full_df["Phân loại"] == "🍊 Kênh Nhà"]
+                        comp_df = full_df[full_df["Phân loại"] == "⚔️ Đối thủ"].head(int(top_n))
+                        df = pd.concat([my_df, comp_df], ignore_index=True).sort_values(by="Lượt xem", ascending=False).reset_index(drop=True)
                         df.insert(0, "Top", df.index + 1)
+
                         st.session_state["market_df"] = df
+                        st.session_state["channel_meta"] = channel_meta
                         st.session_state.pop("macro_result", None)
                         st.session_state.pop("raw_transcript", None)
                     else:
-                        st.warning("Chưa có video nào khớp toàn bộ điều kiện lọc trong khoảng ngày đã chọn.")
+                        st.warning("Chưa có video nào đăng trong khoảng ngày đã chọn (kể cả kênh nhà & đối thủ). Hãy thử tăng số ngày lên 14 hoặc 30 ngày!")
             except Exception as e:
                 st.error(f"Lỗi quét dữ liệu: {e}")
 
 if "market_df" in st.session_state:
     df = st.session_state["market_df"]
-    tab1, tab2 = st.tabs(["📊 Bảng Xếp Hạng Video", "🧠 Phân Cụm Chủ Đề & Bóc Tách Kịch Bản"])
+    channel_meta = st.session_state.get("channel_meta", {})
+
+    tab1, tab2, tab3 = st.tabs([
+        "📊 Bảng Xếp Hạng Chung",
+        "⚖️ So Sánh Kênh Nhà vs Đối Thủ",
+        "🧠 Phân Cụm Chủ Đề & Kịch Bản"
+    ])
 
     with tab1:
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Tổng video đạt chuẩn", f"{len(df)} video")
+        c1.metric("Tổng video quét được", f"{len(df)} video")
         c2.metric("Lượt xem trung bình", f"{int(df['Lượt xem'].mean()):,}")
-        c3.metric("Tốc độ tăng trưởng cao nhất", f"{df['VPH (View/Giờ)'].max():,} /h")
+        c3.metric("VPH cao nhất", f"{df['VPH (View/Giờ)'].max():,} /h")
         c4.metric("Hệ số đột phá cao nhất", f"{df['Đột phá (View/Sub)'].max()}x")
 
-        col_f1, col_f2 = st.columns([2, 1])
+        col_f1, col_f2, col_f3 = st.columns([1.2, 1.5, 1])
         with col_f1:
-            selected_pillar = st.selectbox(
-                "🎯 Lọc nhanh theo Nhóm Chủ Đề:",
-                ["Tất cả chủ đề"] + sorted(df["Nhóm Chủ Đề"].unique().tolist())
+            selected_type = st.selectbox(
+                "🏷️ Lọc Kênh Nhà / Đối Thủ:",
+                ["Tất cả", "🍊 Kênh Nhà", "⚔️ Đối thủ"]
             )
         with col_f2:
+            selected_pillar = st.selectbox(
+                "🎯 Lọc theo Nhóm Chủ Đề:",
+                ["Tất cả chủ đề"] + sorted(df["Nhóm Chủ Đề"].unique().tolist())
+            )
+        with col_f3:
             selected_origin = st.selectbox(
                 "🌏 Lọc theo Xuất xứ:",
                 ["Tất cả"] + sorted(df["Xuất xứ"].unique().tolist())
             )
 
         view_df = df.copy()
+        if selected_type != "Tất cả":
+            view_df = view_df[view_df["Phân loại"] == selected_type]
         if selected_pillar != "Tất cả chủ đề":
             view_df = view_df[view_df["Nhóm Chủ Đề"] == selected_pillar]
         if selected_origin != "Tất cả":
@@ -367,10 +422,138 @@ if "market_df" in st.session_state:
                 "Link": st.column_config.LinkColumn("Mở YouTube", display_text="Xem ngay")
             },
             use_container_width=True,
-            height=720
+            height=700
         )
 
     with tab2:
+        st.subheader("⚖️ Đối Chiếu Hiệu Suất: Kênh Nhà (Camxi) vs Trung Bình Thị Trường Đối Thủ")
+        my_vids = df[df["Phân loại"] == "🍊 Kênh Nhà"]
+        comp_vids = df[df["Phân loại"] == "⚔️ Đối thủ"]
+
+        # Summary Comparison Table between My Channels and Competitors
+        comp_summary = []
+        # Group by individual My Channels
+        for k_name, grp in my_vids.groupby("Kênh"):
+            comp_summary.append({
+                "Nhóm So Sánh": f"🍊 {k_name}",
+                "Subscribers": int(grp["Subscribers"].max()),
+                "Số Video (Kỳ này)": len(grp),
+                "View Trung Bình / Vid": int(grp["Lượt xem"].mean()),
+                "View Cao Nhất": int(grp["Lượt xem"].max()),
+                "VPH Trung Bình": round(grp["VPH (View/Giờ)"].mean(), 1),
+                "Đột Phá TB (View/Sub)": round(grp["Đột phá (View/Sub)"].mean(), 2),
+                "Tương Tác TB (%)": round(grp["Tương tác (%)"].mean(), 2)
+            })
+
+        # Add Overall My Channels row if >1 channel
+        if len(my_vids) > 0:
+            comp_summary.append({
+                "Nhóm So Sánh": "🍊 TỔNG HỢP KÊNH NHÀ",
+                "Subscribers": int(my_vids.groupby("Kênh")["Subscribers"].max().sum()),
+                "Số Video (Kỳ này)": len(my_vids),
+                "View Trung Bình / Vid": int(my_vids["Lượt xem"].mean()),
+                "View Cao Nhất": int(my_vids["Lượt xem"].max()),
+                "VPH Trung Bình": round(my_vids["VPH (View/Giờ)"].mean(), 1),
+                "Đột Phá TB (View/Sub)": round(my_vids["Đột phá (View/Sub)"].mean(), 2),
+                "Tương Tác TB (%)": round(my_vids["Tương tác (%)"].mean(), 2)
+            })
+
+        if len(comp_vids) > 0:
+            comp_summary.append({
+                "Nhóm So Sánh": "⚔️ TRUNG BÌNH ĐỐI THỦ (VN/TQ)",
+                "Subscribers": int(comp_vids.groupby("Kênh")["Subscribers"].max().mean()),
+                "Số Video (Kỳ này)": len(comp_vids),
+                "View Trung Bình / Vid": int(comp_vids["Lượt xem"].mean()),
+                "View Cao Nhất": int(comp_vids["Lượt xem"].max()),
+                "VPH Trung Bình": round(comp_vids["VPH (View/Giờ)"].mean(), 1),
+                "Đột Phá TB (View/Sub)": round(comp_vids["Đột phá (View/Sub)"].mean(), 2),
+                "Tương Tác TB (%)": round(comp_vids["Tương tác (%)"].mean(), 2)
+            })
+
+            top10_comp = comp_vids.head(10)
+            comp_summary.append({
+                "Nhóm So Sánh": "🏆 TOP 10 VIDEO ĐỐI THỦ MẠNH NHẤT",
+                "Subscribers": int(top10_comp.groupby("Kênh")["Subscribers"].max().mean()),
+                "Số Video (Kỳ này)": len(top10_comp),
+                "View Trung Bình / Vid": int(top10_comp["Lượt xem"].mean()),
+                "View Cao Nhất": int(top10_comp["Lượt xem"].max()),
+                "VPH Trung Bình": round(top10_comp["VPH (View/Giờ)"].mean(), 1),
+                "Đột Phá TB (View/Sub)": round(top10_comp["Đột phá (View/Sub)"].mean(), 2),
+                "Tương Tác TB (%)": round(top10_comp["Tương tác (%)"].mean(), 2)
+            })
+
+        if comp_summary:
+            st.dataframe(pd.DataFrame(comp_summary), use_container_width=True)
+
+        # Delta KPI Cards comparing My Channels vs Competitors
+        if len(my_vids) > 0 and len(comp_vids) > 0:
+            my_avg_v = my_vids["Lượt xem"].mean()
+            comp_avg_v = comp_vids["Lượt xem"].mean()
+            my_vph = my_vids["VPH (View/Giờ)"].mean()
+            comp_vph = comp_vids["VPH (View/Giờ)"].mean()
+            my_out = my_vids["Đột phá (View/Sub)"].mean()
+            comp_out = comp_vids["Đột phá (View/Sub)"].mean()
+            my_eng = my_vids["Tương tác (%)"].mean()
+            comp_eng = comp_vids["Tương tác (%)"].mean()
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(
+                "View TB Kênh Nhà",
+                f"{int(my_avg_v):,}",
+                delta=f"{int(my_avg_v - comp_avg_v):,} vs Đối thủ"
+            )
+            m2.metric(
+                "VPH TB Kênh Nhà",
+                f"{my_vph:.1f} /h",
+                delta=f"{my_vph - comp_vph:+.1f} /h vs Đối thủ"
+            )
+            m3.metric(
+                "Hệ Số Đột Phá TB",
+                f"{my_out:.2f}x",
+                delta=f"{my_out - comp_out:+.2f}x vs Đối thủ"
+            )
+            m4.metric(
+                "Tỷ Lệ Tương Tác TB",
+                f"{my_eng:.2f}%",
+                delta=f"{my_eng - comp_eng:+.2f}% vs Đối thủ"
+            )
+
+        st.divider()
+        st.subheader("📹 Danh Sách Video Chi Tiết Của Kênh Nhà Trong Kỳ")
+        if len(my_vids) > 0:
+            st.dataframe(
+                my_vids.drop(columns=["Video ID", "Phân loại", "Xuất xứ"]),
+                column_config={
+                    "Ảnh bìa": st.column_config.ImageColumn("Thumbnail", width="medium"),
+                    "Link": st.column_config.LinkColumn("Mở YouTube", display_text="Xem ngay")
+                },
+                use_container_width=True
+            )
+        else:
+            st.warning("Hai kênh của bạn chưa có video nào đăng mới trong khoảng ngày đã chọn. Hãy thử kéo thanh trượt 'Video đăng trong (ngày qua)' lên 14 hoặc 30 ngày rồi bấm Quét lại!")
+
+        st.subheader("🏅 Bảng Xếp Hạng Từng Kênh Đối Thủ (Gom Theo Kênh)")
+        if len(comp_vids) > 0:
+            ch_rank_df = (
+                comp_vids.groupby(["Kênh", "Xuất xứ"], as_index=False)
+                .agg(
+                    Subscribers=("Subscribers", "max"),
+                    Số_Video=("Video ID", "count"),
+                    Tổng_View=("Lượt xem", "sum"),
+                    View_TB=("Lượt xem", "mean"),
+                    VPH_TB=("VPH (View/Giờ)", "mean"),
+                    Đột_Phá_TB=("Đột phá (View/Sub)", "mean"),
+                    Tương_Tác_TB=("Tương tác (%)", "mean")
+                )
+                .sort_values(by="View_TB", ascending=False)
+            )
+            ch_rank_df["View_TB"] = ch_rank_df["View_TB"].round(0).astype(int)
+            ch_rank_df["VPH_TB"] = ch_rank_df["VPH_TB"].round(1)
+            ch_rank_df["Đột_Phá_TB"] = ch_rank_df["Đột_Phá_TB"].round(2)
+            ch_rank_df["Tương_Tác_TB"] = ch_rank_df["Tương_Tác_TB"].round(2)
+            st.dataframe(ch_rank_df, use_container_width=True)
+
+    with tab3:
         st.subheader("1️⃣ Bảng Hiệu Suất Theo Từng Nhóm Chủ Đề (Tự động 0.1s)")
         cluster_df = (
             df.groupby("Nhóm Chủ Đề", as_index=False)
@@ -404,7 +587,7 @@ if "market_df" in st.session_state:
                     prompt_macro = (
                         "Dựa trên danh sách video YouTube ngách sống độc lập / cải tạo căn hộ nhỏ sau đây:\n"
                         + titles_summary +
-                        "\n\nHãy viết bằng tiếng Việt ngắn gọn: (1) 3 insight đắt giá nhất từ tiêu đề và (2) 5 tiêu đề tiếng Anh kèm dịch tiếng Việt tối ưu cho kênh Chuc Nguyen's Little Life."
+                        "\n\nHãy viết bằng tiếng Việt ngắn gọn: (1) 3 insight đắt giá nhất từ tiêu đề và (2) 5 tiêu đề tiếng Anh kèm dịch tiếng Việt tối ưu cho kênh Chuc Nguyen's Little Life và An Thu's Diary."
                     )
                     st.session_state["macro_result"] = ask_gemini(gemini_key, prompt_macro)
 
@@ -414,7 +597,7 @@ if "market_df" in st.session_state:
         st.divider()
 
         st.subheader("2️⃣ Trích Xuất Phụ Đề & Bình Luận Khán Giả Mỹ Từng Video")
-        video_options = {f"Top {r['Top']}: {r['Tiêu đề Video']} ({r['Lượt xem']:,} views)": r["Video ID"] for _, r in df.iterrows()}
+        video_options = {f"Top {r['Top']} [{r['Phân loại']}]: {r['Tiêu đề Video']} ({r['Lượt xem']:,} views)": r["Video ID"] for _, r in df.iterrows()}
         selected_label = st.selectbox("Chọn 1 video muốn xem kịch bản & bình luận:", list(video_options.keys()))
         selected_vid_id = video_options[selected_label]
 
@@ -452,4 +635,4 @@ if "market_df" in st.session_state:
                 for idx, cmt in enumerate(st.session_state["raw_comments"], 1):
                     st.markdown(f"**{idx}.** {cmt}")
 else:
-    st.info("👈 Hãy bấm nút **'🚀 Quét Dữ Liệu Ngay'** ở thanh bên trái để bắt đầu tổng hợp dữ liệu thị trường!")
+    st.info("👈 Hãy bấm nút **'🚀 Quét & So Sánh Dữ Liệu'** ở thanh bên trái để bắt đầu tổng hợp và đối chiếu chỉ số kênh nhà với thị trường!")
