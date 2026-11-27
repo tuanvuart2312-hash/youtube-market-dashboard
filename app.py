@@ -23,7 +23,7 @@ CN_MARKERS = [
 import time
 
 def ask_gemini(api_key, prompt_text):
-    models_to_try = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-2.5-pro"]
+    models_to_try = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.1-pro-preview"]
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}],
