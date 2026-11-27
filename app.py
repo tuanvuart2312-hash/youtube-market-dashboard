@@ -23,12 +23,21 @@ CN_MARKERS = [
 def ask_gemini(api_key, prompt_text):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
-    payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
-    response = requests.post(url, headers=headers, json=payload, timeout=60)
-    if response.status_code == 200:
-        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
-    return f"API Error ({response.status_code}): {response.text}"
-
+    payload = {
+        "contents": [{"parts": [{"text": prompt_text}]}],
+        "generationConfig": {
+            "thinkingConfig": {"thinkingBudget": 0}
+        }
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=180)
+        if response.status_code == 200:
+            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return f"⚠️ Lỗi API ({response.status_code}): {response.text}"
+    except requests.exceptions.Timeout:
+        return "⏳ Kết nối bị quá thời gian chờ (Timeout). Bạn hãy bấm nút phân tích lại một lần nữa nhé!"
+    except Exception as e:
+        return f"⚠️ Lỗi kết nối: {e}"
 def detect_origin(snippet):
     country_code = snippet.get("country", "").upper()
     text_blob = (
