@@ -76,6 +76,35 @@ def parse_email_list(raw_text):
             emails.append(clean)
     return emails
 
+
+def get_unread_messages_count(user_email):
+    if not user_email:
+        return 0
+    messages = load_json_data(CHAT_FILE, [])
+    if not isinstance(messages, list):
+        return 0
+    seen_map = load_json_data("camxi_seen_msg_map.json", {})
+    if not isinstance(seen_map, dict):
+        seen_map = {}
+    last_seen_id = int(seen_map.get(user_email.strip().lower(), 0))
+    return sum(
+        1 for m in messages
+        if int(m.get("id", 0)) > last_seen_id and str(m.get("sender", "")).strip().lower() != user_email.strip().lower()
+    )
+
+def mark_messages_as_read(user_email):
+    if not user_email:
+        return
+    messages = load_json_data(CHAT_FILE, [])
+    max_id = max([int(m.get("id", 0)) for m in messages], default=0) if isinstance(messages, list) else 0
+    seen_map = load_json_data("camxi_seen_msg_map.json", {})
+    if not isinstance(seen_map, dict):
+        seen_map = {}
+    clean_em = user_email.strip().lower()
+    if int(seen_map.get(clean_em, 0)) < max_id:
+        seen_map[clean_em] = max_id
+        save_json_data("camxi_seen_msg_map.json", seen_map)
+
 def make_mail_passcode(email_str):
     digest = hashlib.sha256(f"camxi_mail_lock::{email_str.strip().lower()}".encode("utf-8")).hexdigest()
     return digest[:6].upper()
@@ -280,6 +309,24 @@ st.markdown("""
         font-size: 11px;
         margin-left: 6px;
     }
+
+    .tab-unread-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        margin-left: 7px;
+        border-radius: 999px;
+        background-color: #E53935;
+        color: #FFFFFF;
+        font-size: 11.5px;
+        font-weight: 800;
+        line-height: 1;
+        box-shadow: 0 2px 6px rgba(229, 57, 53, 0.35);
+    }
+
     .chat-text {
         color: #1F2D24;
         font-size: 14px;
@@ -590,7 +637,14 @@ def render_team_workspace():
     left_col, right_col = st.columns([1.15, 1])
 
     with left_col:
-        st.markdown("### 🗨️ Khung Chat Nội Bộ")
+        lc_h1, lc_h2 = st.columns([2.6, 1.4])
+        with lc_h1:
+            st.markdown("### 🗨️ Khung Chat Nội Bộ")
+        with lc_h2:
+            if st.button("✓ Đã đọc tất cả", key="mark_all_read_btn", use_container_width=True):
+                mark_messages_as_read(current_email)
+                st.rerun()
+        mark_messages_as_read(current_email)
         render_team_chat(current_email, enable_sound_alert=sound_alert)
 
     with right_col:
@@ -862,12 +916,79 @@ if run_btn:
             except Exception as e:
                 st.error(f"Lỗi quét dữ liệu: {e}")
 
+_active_chat_mail = (
+    st.session_state.get("verified_mail_session")
+    or st.session_state.get("login_mail_input", "").strip().lower()
+)
+_unread_cnt = get_unread_messages_count(_active_chat_mail)
+_tab4_label = (
+    f"💬 Thảo Luận Team & Đề Xuất Update ({_unread_cnt} mới)"
+    if _unread_cnt > 0
+    else "💬 Thảo Luận Team & Đề Xuất Update"
+)
+
 tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Bảng Xếp Hạng Chung",
     "⚖️ So Sánh Kênh Nhà vs Đối Thủ",
     "📈 Biểu Đồ Chủ Đề & Kịch Bản",
-    "💬 Thảo Luận Team & Đề Xuất Update"
+    _tab4_label
 ])
+
+if _unread_cnt > 0:
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const count = {_unread_cnt};
+            const doc = window.parent.document;
+            const tabs = doc.querySelectorAll('button[data-baseweb="tab"]');
+            if (tabs && tabs.length >= 4) {{
+                const targetTab = tabs[3];
+                let badge = targetTab.querySelector('.camxi-unread-badge');
+                if (!badge) {{
+                    badge = doc.createElement('span');
+                    badge.className = 'camxi-unread-badge';
+                    badge.style.cssText = [
+                        'display:inline-flex',
+                        'align-items:center',
+                        'justify-content:center',
+                        'min-width:20px',
+                        'height:20px',
+                        'padding:0 6px',
+                        'margin-left:8px',
+                        'border-radius:999px',
+                        'background:#D92D20',
+                        'color:#FFFFFF',
+                        'font-size:11px',
+                        'font-weight:800',
+                        'line-height:1',
+                        'box-shadow:0 2px 5px rgba(217,45,32,0.35)'
+                    ].join(';');
+                    targetTab.appendChild(badge);
+                }}
+                badge.textContent = count > 99 ? '99+' : String(count);
+            }}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+else:
+    components.html(
+        """
+        <script>
+        (function() {
+            const doc = window.parent.document;
+            const tabs = doc.querySelectorAll('button[data-baseweb="tab"]');
+            if (tabs && tabs.length >= 4) {
+                const badge = tabs[3].querySelector('.camxi-unread-badge');
+                if (badge) badge.remove();
+            }
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 if "market_df" in st.session_state:
     df = st.session_state["market_df"]
