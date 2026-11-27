@@ -24,16 +24,13 @@ def ask_gemini(api_key, prompt_text):
     models_to_try = ["gemini-3.8-flash-lite", "gemini-3.8-flash"]
     headers = {"Content-Type": "application/json"}
     payload = {
-        "contents": [{"parts": [{"text": prompt_text}]}],
-        "generationConfig": {
-            "thinkingConfig": {"thinkingBudget": 0}
-        }
+        "contents": [{"parts": [{"text": prompt_text}]}]
     }
     last_error = ""
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=20)
+            response = requests.post(url, headers=headers, json=payload, timeout=45)
             if response.status_code == 200:
                 return response.json()["candidates"][0]["content"]["parts"][0]["text"]
             last_error = f"({response.status_code}): {response.text}"
