@@ -23,7 +23,7 @@ CN_MARKERS = [
 import time
 
 def ask_gemini(api_key, prompt_text):
-    models_to_try = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.1-pro-preview"]
+    models_to_try = ["gemini-3.8-flash", "gemini-3.8-flash-lite"]
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}],
@@ -34,19 +34,19 @@ def ask_gemini(api_key, prompt_text):
     last_error = ""
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        for _ in range(2):
+        for attempt in range(3):
             try:
                 response = requests.post(url, headers=headers, json=payload, timeout=120)
                 if response.status_code == 200:
                     return response.json()["candidates"][0]["content"]["parts"][0]["text"]
                 last_error = f"({response.status_code}): {response.text}"
                 if response.status_code in [429, 503]:
-                    time.sleep(2)
+                    time.sleep(3 * (attempt + 1))
                     continue
                 break
             except Exception as e:
                 last_error = str(e)
-                time.sleep(2)
+                time.sleep(3)
     return f"⚠️ Hệ thống AI đang quá tải tạm thời, vui lòng thử lại sau ít phút. Chi tiết: {last_error}"
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=180)
