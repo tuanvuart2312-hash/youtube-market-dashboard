@@ -8,6 +8,8 @@ import requests
 import re
 import json
 import os
+import time
+import hashlib
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
@@ -22,18 +24,19 @@ TEAM_B64 = "iVBORw0KGgoAAAANSUhEUgAAA3AAAAEGCAYAAAAkDnciAAEAAElEQVR42uxdd5xcVfX/
 
 CHAT_FILE = "camxi_team_chat.json"
 NOTES_FILE = "camxi_update_notes.json"
+PRESENCE_FILE = "camxi_online_presence.json"
+ONLINE_TIMEOUT_SECONDS = 25
 
-TEAM_MEMBERS = [
-    ("Chị Phương", "Sản xuất & Điều phối"),
-    ("Vũ", "Giám sát tổng"),
-    ("Linh", "Quản lý kênh"),
-    ("Cảnh", "Quản lý kênh"),
-    ("Thảo", "Quản lý kênh"),
-    ("Long", "Leader edit"),
-    ("Chúc", "Leader content"),
-    ("Đông", "Edit"),
-    ("My", "Content"),
-    ("Nhập tên khác...", "Thành viên CAMXI")
+DEFAULT_SHARED_EMAILS = [
+    "phuong.camxi@gmail.com",
+    "vu.camxi@gmail.com",
+    "linh.camxi@gmail.com",
+    "canh.camxi@gmail.com",
+    "thao.camxi@gmail.com",
+    "long.camxi@gmail.com",
+    "chuc.camxi@gmail.com",
+    "dong.camxi@gmail.com",
+    "my.camxi@gmail.com"
 ]
 
 def load_json_data(filepath, default_data):
@@ -55,6 +58,53 @@ def save_json_data(filepath, data):
 def get_vn_time():
     vn_tz = timezone(timedelta(hours=7))
     return datetime.now(vn_tz).strftime("%H:%M - %d/%m/%Y")
+
+def parse_email_list(raw_text):
+    tokens = re.split(r"[\n,;\s]+", raw_text.strip())
+    emails = []
+    seen = set()
+    for t in tokens:
+        clean = t.strip().lower()
+        if clean and "@" in clean and "." in clean.split("@")[-1] and clean not in seen:
+            seen.add(clean)
+            emails.append(clean)
+    return emails
+
+def make_mail_passcode(email_str):
+    digest = hashlib.sha256(f"camxi_mail_lock::{email_str.strip().lower()}".encode("utf-8")).hexdigest()
+    return digest[:6].upper()
+
+def update_and_get_online_users(current_email):
+    if "client_sid" not in st.session_state:
+        st.session_state["client_sid"] = f"sid_{int(time.time() * 1000)}_{os.getpid()}_{id(st.session_state)}"
+
+    now_ts = time.time()
+    presence_data = load_json_data(PRESENCE_FILE, {})
+    if not isinstance(presence_data, dict):
+        presence_data = {}
+
+    presence_data[st.session_state["client_sid"]] = {
+        "email": current_email,
+        "last_seen": now_ts
+    }
+
+    active_entries = [
+        info for sid, info in presence_data.items()
+        if (now_ts - info.get("last_seen", 0)) <= ONLINE_TIMEOUT_SECONDS
+    ]
+
+    cleaned_dict = {
+        sid: info for sid, info in presence_data.items()
+        if (now_ts - info.get("last_seen", 0)) <= ONLINE_TIMEOUT_SECONDS
+    }
+    save_json_data(PRESENCE_FILE, cleaned_dict)
+
+    seen_emails = []
+    for entry in active_entries:
+        em = entry.get("email", "").strip().lower()
+        if em and em not in seen_emails:
+            seen_emails.append(em)
+    return seen_emails
 
 def play_notification_sound_and_toast(sender, tag, text):
     st.toast(f"🔔 Tin nhắn mới từ **{sender}** [{tag}]: {text[:70]}", icon="💬")
@@ -152,6 +202,34 @@ st.markdown("""
         letter-spacing: 1px;
         margin-top: 8px;
     }
+    .online-bar {
+        background-color: #F5EFE4;
+        border: 1px solid #E2CBA9;
+        border-radius: 10px;
+        padding: 8px 12px;
+        margin-bottom: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+    }
+    .online-count-badge {
+        background-color: #2E4C3B;
+        color: #FFFFFF;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 3px 10px;
+        border-radius: 12px;
+    }
+    .online-user-chip {
+        background-color: #FFFFFF;
+        border: 1px solid #D9BE96;
+        color: #2E4C3B;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 2px 9px;
+        border-radius: 12px;
+    }
     .new-msg-banner {
         background: linear-gradient(90deg, #FFF4E2 0%, #F7E4C3 100%);
         border: 1.5px solid #D2851E;
@@ -187,12 +265,6 @@ st.markdown("""
         font-weight: 800;
         color: #2E4C3B;
         font-size: 13.5px;
-    }
-    .chat-role {
-        color: #B86B11;
-        font-size: 11.5px;
-        font-weight: 600;
-        margin-left: 4px;
     }
     .chat-tag {
         background-color: #2E4C3B;
@@ -311,14 +383,26 @@ def resolve_channel_id(youtube, raw_input):
     return res["items"][0]["id"] if res.get("items") else None
 
 @st.fragment(run_every=4)
-def render_team_chat(current_user, current_role, enable_sound_alert=True):
+def render_team_chat(current_email, enable_sound_alert=True):
+    online_emails = update_and_get_online_users(current_email)
+    online_count = len(online_emails)
+    chips_html = "".join([
+        f'<span class="online-user-chip">🟢 {em}</span>'
+        for em in online_emails
+    ])
+    st.markdown(f"""
+    <div class="online-bar">
+        <span class="online-count-badge">🟢 {online_count} người đang online</span>
+        {chips_html}
+    </div>
+    """, unsafe_allow_html=True)
+
     default_msgs = [
         {
             "id": 1001,
-            "sender": "Chị Phương",
-            "role": "Sản xuất & Điều phối",
+            "sender": DEFAULT_SHARED_EMAILS[0],
             "tag": "📢 Thông báo",
-            "text": "Chào cả team CAMXI (Vũ, Linh, Cảnh, Thảo, Long, Chúc, Đông, My)! Khi có tin nhắn mới sẽ có thông báo & chuông báo tự động ngay tại đây.",
+            "text": "Chào mọi người! Mỗi người đăng nhập đúng email chia sẻ trang tính của mình để chat và gửi đề xuất update nhé.",
             "time": "Hệ thống"
         }
     ]
@@ -331,18 +415,18 @@ def render_team_chat(current_user, current_role, enable_sound_alert=True):
 
     new_incoming = [
         m for m in messages
-        if m.get("id", 0) > st.session_state["last_seen_msg_id"] and m.get("sender") != current_user
+        if m.get("id", 0) > st.session_state["last_seen_msg_id"] and m.get("sender") != current_email
     ]
     if new_incoming:
         latest_in = new_incoming[-1]
         st.session_state["last_seen_msg_id"] = max_msg_id
         st.session_state["new_msg_alert"] = (
             f"🔔 Tin nhắn mới ({len(new_incoming)}) từ **{latest_in.get('sender')}** "
-            f"({latest_in.get('role', '')}) [{latest_in.get('tag', '')}]: {latest_in.get('text')}"
+            f"[{latest_in.get('tag', '')}]: {latest_in.get('text')}"
         )
         if enable_sound_alert:
             play_notification_sound_and_toast(
-                latest_in.get("sender", "Thành viên"),
+                latest_in.get("sender", "Email"),
                 latest_in.get("tag", "💬 Chung"),
                 latest_in.get("text", "")
             )
@@ -356,19 +440,19 @@ def render_team_chat(current_user, current_role, enable_sound_alert=True):
                 st.session_state["new_msg_alert"] = None
                 st.rerun(scope="fragment")
 
-    chat_box = st.container(height=410, border=True)
+    chat_box = st.container(height=390, border=True)
     with chat_box:
         if not messages:
             st.caption("Chưa có tin nhắn nào. Hãy là người đầu tiên mở lời!")
         else:
             for msg in messages[-60:]:
-                is_me = (msg.get("sender") == current_user)
+                sender_id = msg.get("sender", "")
+                is_me = (sender_id == current_email)
                 card_cls = "chat-card-mine" if is_me else "chat-card"
-                role_html = f'<span class="chat-role">• {msg.get("role")}</span>' if msg.get("role") else ""
                 st.markdown(f"""
                 <div class="{card_cls}">
                     <div class="chat-meta">
-                        <span class="chat-sender">{msg.get('sender', 'Thành viên')}</span>{role_html}
+                        <span class="chat-sender">{sender_id}</span>
                         <span class="chat-tag">{msg.get('tag', '💬 Chung')}</span>
                         <span style="float:right;">{msg.get('time', '')}</span>
                     </div>
@@ -387,7 +471,7 @@ def render_team_chat(current_user, current_role, enable_sound_alert=True):
         with c_msg:
             msg_input = st.text_input(
                 "Nội dung tin nhắn",
-                placeholder=f"Nhắn tin với tư cách {current_user} ({current_role})...",
+                placeholder=f"Nhắn tin với email {current_email}...",
                 label_visibility="collapsed"
             )
         with c_send:
@@ -398,8 +482,7 @@ def render_team_chat(current_user, current_role, enable_sound_alert=True):
             next_id = max([m.get("id", 0) for m in latest_msgs], default=1000) + 1
             latest_msgs.append({
                 "id": next_id,
-                "sender": current_user,
-                "role": current_role,
+                "sender": current_email,
                 "tag": msg_tag,
                 "text": msg_input.strip(),
                 "time": get_vn_time()
@@ -409,37 +492,85 @@ def render_team_chat(current_user, current_role, enable_sound_alert=True):
             st.rerun(scope="fragment")
 
 def render_team_workspace():
-    st.subheader("💬 Không Gian Thảo Luận Team CAMXI & Đề Xuất Update Phiên Bản Mới")
+    st.subheader("💬 Không Gian Thảo Luận & Đề Xuất Update Phiên Bản Mới")
 
-    role_map = {name: role for name, role in TEAM_MEMBERS}
-    name_options = [name for name, _ in TEAM_MEMBERS]
+    with st.expander("📧 Danh sách email được chia sẻ trang tính", expanded=False):
+        raw_emails_input = st.text_area(
+            "Dán danh sách email được chia sẻ trang tính (mỗi email 1 dòng hoặc cách nhau bởi dấu phẩy):",
+            value="\n".join(DEFAULT_SHARED_EMAILS),
+            height=130
+        )
 
-    u_col1, u_col2, u_col3 = st.columns([1.4, 2.0, 1.0])
+    shared_emails = parse_email_list(raw_emails_input)
+    if not shared_emails:
+        shared_emails = DEFAULT_SHARED_EMAILS
+
+    if "verified_mail_session" not in st.session_state:
+        st.session_state["verified_mail_session"] = None
+
+    verified_email = st.session_state.get("verified_mail_session")
+
+    if not verified_email:
+        st.markdown("### 🔐 Xác Thực Email Chia Sẻ Trang Tính Trước Khi Chat")
+        st.caption("Mỗi người nhập đúng email trang tính của mình và xác nhận mã xác thực (hoặc mã riêng của mail) để tránh chọn nhầm hoặc mạo danh email người khác.")
+
+        v_col1, v_col2, v_col3 = st.columns([1.8, 1.5, 1.2])
+        with v_col1:
+            input_mail = st.text_input(
+                "Email chia sẻ trang tính của bạn *",
+                placeholder="ví dụ: tenban@gmail.com",
+                key="login_mail_input"
+            )
+        with v_col2:
+            clean_candidate = input_mail.strip().lower()
+            expected_code = make_mail_passcode(clean_candidate) if ("@" in clean_candidate and "." in clean_candidate.split("@")[-1]) else ""
+            if expected_code:
+                st.caption(f"Mã xác thực của **{clean_candidate}**: `{expected_code}`")
+            entered_code = st.text_input(
+                "Nhập mã xác thực *",
+                placeholder="Gõ 6 ký tự mã bên trên",
+                key="login_code_input"
+            )
+        with v_col3:
+            st.write("")
+            st.write("")
+            login_btn = st.button("🔓 Xác Nhận Vào Chat", type="primary", use_container_width=True)
+
+        if login_btn:
+            if not clean_candidate or "@" not in clean_candidate or "." not in clean_candidate.split("@")[-1]:
+                st.error("⚠️ Vui lòng nhập địa chỉ email hợp lệ!")
+            elif clean_candidate not in shared_emails:
+                st.error("⚠️ Email này chưa có trong danh sách email được chia sẻ trang tính! Hãy kiểm tra lại danh sách email ở mục phía trên.")
+            elif entered_code.strip().upper() != make_mail_passcode(clean_candidate):
+                st.error("⚠️ Mã xác thực không khớp với email đã nhập! Hãy nhập đúng mã xác thực hiển thị cho email đó.")
+            else:
+                st.session_state["verified_mail_session"] = clean_candidate
+                st.rerun()
+
+        st.info("🔒 Khung chat nội bộ đang khóa cho đến khi bạn xác thực đúng email chia sẻ trang tính của mình.")
+        return
+
+    current_email = verified_email
+    u_col1, u_col2, u_col3 = st.columns([2.4, 1.2, 1.0])
     with u_col1:
-        member_preset = st.selectbox("👤 Chọn thành viên:", name_options)
+        st.success(f"✅ Đã xác thực email: **{current_email}**")
     with u_col2:
-        if member_preset == "Nhập tên khác...":
-            custom_name = st.text_input("Gõ tên hiển thị:", value="Thành viên CAMXI")
-            custom_role = st.text_input("Vai trò:", value="Team CAMXI")
-            current_user = custom_name.strip() if custom_name.strip() else "Thành viên CAMXI"
-            current_role = custom_role.strip() if custom_role.strip() else "Team CAMXI"
-        else:
-            current_user = member_preset
-            current_role = role_map.get(member_preset, "Team CAMXI")
-            st.info(f"**{current_user}** — *{current_role}*")
-    with u_col3:
         sound_alert = st.toggle("🔊 Chuông & Banner báo tin", value=True)
+    with u_col3:
+        if st.button("🚪 Đổi email", use_container_width=True):
+            st.session_state["verified_mail_session"] = None
+            st.rerun()
 
     st.divider()
     left_col, right_col = st.columns([1.15, 1])
 
     with left_col:
-        st.markdown("### 🗨️ Khung Chat Nội Bộ Team CAMXI")
-        render_team_chat(current_user, current_role, enable_sound_alert=sound_alert)
+        st.markdown("### 🗨️ Khung Chat Nội Bộ")
+        render_team_chat(current_email, enable_sound_alert=sound_alert)
 
     with right_col:
         st.markdown("### 📝 Note Đề Xuất Update Phiên Bản Mới")
-        st.caption("Ghi lại các tính năng, bộ lọc hoặc biểu đồ team muốn bổ sung cho lần nâng cấp tới.")
+        st.caption("Ghi lại các tính năng, bộ lọc hoặc biểu đồ muốn bổ sung cho lần nâng cấp tới.")
 
         with st.form("camxi_update_note_form", clear_on_submit=True):
             n_title = st.text_input("Tên tính năng / Đề xuất nâng cấp *", placeholder="Ví dụ: Thêm biểu đồ theo dõi lượt tăng view theo từng ngày...")
@@ -462,7 +593,7 @@ def render_team_workspace():
                         "priority": n_priority,
                         "area": n_area,
                         "detail": n_detail.strip(),
-                        "author": f"{current_user} ({current_role})",
+                        "author": current_email,
                         "status": "⏳ Chờ duyệt",
                         "time": get_vn_time()
                     })
@@ -477,7 +608,7 @@ def render_team_workspace():
                 "priority": "🟡 Trung bình",
                 "area": "Giao diện / Khác",
                 "detail": "Cho phép bấm nút lưu thẳng danh sách handle đối thủ mới thêm để lần sau mở app không phải gõ lại.",
-                "author": "Chị Phương (Sản xuất & Điều phối)",
+                "author": DEFAULT_SHARED_EMAILS[0],
                 "status": "⏳ Chờ duyệt",
                 "time": "Mẫu hệ thống"
             }
