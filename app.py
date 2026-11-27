@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 from googleapiclient.discovery import build
 from youtube_transcript_api import YouTubeTranscriptApi
 import pandas as pd
@@ -22,6 +23,19 @@ TEAM_B64 = "iVBORw0KGgoAAAANSUhEUgAAA3AAAAEGCAYAAAAkDnciAAEAAElEQVR42uxdd5xcVfX/
 CHAT_FILE = "camxi_team_chat.json"
 NOTES_FILE = "camxi_update_notes.json"
 
+TEAM_MEMBERS = [
+    ("Chị Phương", "Sản xuất & Điều phối"),
+    ("Vũ", "Giám sát tổng"),
+    ("Linh", "Quản lý kênh"),
+    ("Cảnh", "Quản lý kênh"),
+    ("Thảo", "Quản lý kênh"),
+    ("Long", "Leader edit"),
+    ("Chúc", "Leader content"),
+    ("Đông", "Edit"),
+    ("My", "Content"),
+    ("Nhập tên khác...", "Thành viên CAMXI")
+]
+
 def load_json_data(filepath, default_data):
     if os.path.exists(filepath):
         try:
@@ -41,6 +55,33 @@ def save_json_data(filepath, data):
 def get_vn_time():
     vn_tz = timezone(timedelta(hours=7))
     return datetime.now(vn_tz).strftime("%H:%M - %d/%m/%Y")
+
+def play_notification_sound_and_toast(sender, tag, text):
+    st.toast(f"🔔 Tin nhắn mới từ **{sender}** [{tag}]: {text[:70]}", icon="💬")
+    components.html(
+        """
+        <script>
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (AudioCtx) {
+                const ctx = new AudioCtx();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(880, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1174.66, ctx.currentTime + 0.14);
+                gain.gain.setValueAtTime(0.08, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.26);
+            }
+        } catch (e) {}
+        </script>
+        """,
+        height=0,
+    )
 
 st.markdown("""
 <style>
@@ -111,6 +152,16 @@ st.markdown("""
         letter-spacing: 1px;
         margin-top: 8px;
     }
+    .new-msg-banner {
+        background: linear-gradient(90deg, #FFF4E2 0%, #F7E4C3 100%);
+        border: 1.5px solid #D2851E;
+        border-radius: 10px;
+        padding: 10px 14px;
+        margin-bottom: 10px;
+        color: #2E4C3B;
+        font-weight: 700;
+        font-size: 13.5px;
+    }
     .chat-card {
         background-color: #FFFDF9;
         border: 1px solid #E8D5B7;
@@ -136,6 +187,12 @@ st.markdown("""
         font-weight: 800;
         color: #2E4C3B;
         font-size: 13.5px;
+    }
+    .chat-role {
+        color: #B86B11;
+        font-size: 11.5px;
+        font-weight: 600;
+        margin-left: 4px;
     }
     .chat-tag {
         background-color: #2E4C3B;
@@ -253,29 +310,65 @@ def resolve_channel_id(youtube, raw_input):
     res = youtube.channels().list(part="id", forHandle=text).execute()
     return res["items"][0]["id"] if res.get("items") else None
 
-@st.fragment(run_every=5)
-def render_team_chat(current_user):
-    messages = load_json_data(CHAT_FILE, [
+@st.fragment(run_every=4)
+def render_team_chat(current_user, current_role, enable_sound_alert=True):
+    default_msgs = [
         {
+            "id": 1001,
             "sender": "Chị Phương",
+            "role": "Sản xuất & Điều phối",
             "tag": "📢 Thông báo",
-            "text": "Chào cả team CAMXI! Mọi người theo dõi chỉ số đối thủ trên dashboard và nhắn ý tưởng kịch bản hoặc đề xuất update vào đây nhé 🍊",
+            "text": "Chào cả team CAMXI (Vũ, Linh, Cảnh, Thảo, Long, Chúc, Đông, My)! Khi có tin nhắn mới sẽ có thông báo & chuông báo tự động ngay tại đây.",
             "time": "Hệ thống"
         }
-    ])
+    ]
+    messages = load_json_data(CHAT_FILE, default_msgs)
+    max_msg_id = max([m.get("id", 0) for m in messages], default=0)
 
-    chat_box = st.container(height=420, border=True)
+    if "last_seen_msg_id" not in st.session_state:
+        st.session_state["last_seen_msg_id"] = max_msg_id
+        st.session_state["new_msg_alert"] = None
+
+    new_incoming = [
+        m for m in messages
+        if m.get("id", 0) > st.session_state["last_seen_msg_id"] and m.get("sender") != current_user
+    ]
+    if new_incoming:
+        latest_in = new_incoming[-1]
+        st.session_state["last_seen_msg_id"] = max_msg_id
+        st.session_state["new_msg_alert"] = (
+            f"🔔 Tin nhắn mới ({len(new_incoming)}) từ **{latest_in.get('sender')}** "
+            f"({latest_in.get('role', '')}) [{latest_in.get('tag', '')}]: {latest_in.get('text')}"
+        )
+        if enable_sound_alert:
+            play_notification_sound_and_toast(
+                latest_in.get("sender", "Thành viên"),
+                latest_in.get("tag", "💬 Chung"),
+                latest_in.get("text", "")
+            )
+
+    if st.session_state.get("new_msg_alert"):
+        al_col1, al_col2 = st.columns([5, 1])
+        with al_col1:
+            st.markdown(f'<div class="new-msg-banner">{st.session_state["new_msg_alert"]}</div>', unsafe_allow_html=True)
+        with al_col2:
+            if st.button("Tắt báo", key="dismiss_msg_alert", use_container_width=True):
+                st.session_state["new_msg_alert"] = None
+                st.rerun(scope="fragment")
+
+    chat_box = st.container(height=410, border=True)
     with chat_box:
         if not messages:
             st.caption("Chưa có tin nhắn nào. Hãy là người đầu tiên mở lời!")
         else:
-            for msg in messages[-50:]:
+            for msg in messages[-60:]:
                 is_me = (msg.get("sender") == current_user)
                 card_cls = "chat-card-mine" if is_me else "chat-card"
+                role_html = f'<span class="chat-role">• {msg.get("role")}</span>' if msg.get("role") else ""
                 st.markdown(f"""
                 <div class="{card_cls}">
                     <div class="chat-meta">
-                        <span class="chat-sender">{msg.get('sender', 'Thành viên')}</span>
+                        <span class="chat-sender">{msg.get('sender', 'Thành viên')}</span>{role_html}
                         <span class="chat-tag">{msg.get('tag', '💬 Chung')}</span>
                         <span style="float:right;">{msg.get('time', '')}</span>
                     </div>
@@ -288,13 +381,13 @@ def render_team_chat(current_user):
         with c_tag:
             msg_tag = st.selectbox(
                 "Chủ đề",
-                ["💬 Chung", "💡 Ý tưởng", "📊 Dữ liệu", "🎬 Kịch bản"],
+                ["💬 Chung", "💡 Ý tưởng", "📊 Dữ liệu", "🎬 Kịch bản", "✂️ Edit"],
                 label_visibility="collapsed"
             )
         with c_msg:
             msg_input = st.text_input(
                 "Nội dung tin nhắn",
-                placeholder=f"Nhắn tin với tư cách {current_user}...",
+                placeholder=f"Nhắn tin với tư cách {current_user} ({current_role})...",
                 label_visibility="collapsed"
             )
         with c_send:
@@ -302,49 +395,47 @@ def render_team_chat(current_user):
 
         if submitted and msg_input.strip():
             latest_msgs = load_json_data(CHAT_FILE, messages)
+            next_id = max([m.get("id", 0) for m in latest_msgs], default=1000) + 1
             latest_msgs.append({
+                "id": next_id,
                 "sender": current_user,
+                "role": current_role,
                 "tag": msg_tag,
                 "text": msg_input.strip(),
                 "time": get_vn_time()
             })
             save_json_data(CHAT_FILE, latest_msgs)
+            st.session_state["last_seen_msg_id"] = next_id
             st.rerun(scope="fragment")
 
 def render_team_workspace():
-    st.subheader("💬 Không Gian Thảo Luận Team & Đề Xuất Update Phiên Bản Mới")
+    st.subheader("💬 Không Gian Thảo Luận Team CAMXI & Đề Xuất Update Phiên Bản Mới")
 
-    u_col1, u_col2 = st.columns([1.5, 2.5])
+    role_map = {name: role for name, role in TEAM_MEMBERS}
+    name_options = [name for name, _ in TEAM_MEMBERS]
+
+    u_col1, u_col2, u_col3 = st.columns([1.4, 2.0, 1.0])
     with u_col1:
-        member_preset = st.selectbox(
-            "👤 Chọn tên của bạn:",
-            [
-                "Chị Phương",
-                "Tuấn Vũ",
-                "Vũ Linh",
-                "MC Chúc Nguyễn",
-                "MC Long",
-                "Thành viên Media 1",
-                "Thành viên Media 2",
-                "Thành viên Media 3",
-                "Thành viên Media 4",
-                "Nhập tên khác..."
-            ]
-        )
+        member_preset = st.selectbox("👤 Chọn thành viên:", name_options)
     with u_col2:
         if member_preset == "Nhập tên khác...":
-            custom_name = st.text_input("Gõ tên hiển thị của bạn:", value="Thành viên CAMXI")
+            custom_name = st.text_input("Gõ tên hiển thị:", value="Thành viên CAMXI")
+            custom_role = st.text_input("Vai trò:", value="Team CAMXI")
             current_user = custom_name.strip() if custom_name.strip() else "Thành viên CAMXI"
+            current_role = custom_role.strip() if custom_role.strip() else "Team CAMXI"
         else:
             current_user = member_preset
-            st.info(f"Đang tham gia với tên: **{current_user}** (Khung chat tự động cập nhật tin nhắn mới mỗi 5 giây)")
+            current_role = role_map.get(member_preset, "Team CAMXI")
+            st.info(f"**{current_user}** — *{current_role}*")
+    with u_col3:
+        sound_alert = st.toggle("🔊 Chuông & Banner báo tin", value=True)
 
     st.divider()
     left_col, right_col = st.columns([1.15, 1])
 
     with left_col:
         st.markdown("### 🗨️ Khung Chat Nội Bộ Team CAMXI")
-        render_team_chat(current_user)
+        render_team_chat(current_user, current_role, enable_sound_alert=sound_alert)
 
     with right_col:
         st.markdown("### 📝 Note Đề Xuất Update Phiên Bản Mới")
@@ -371,7 +462,7 @@ def render_team_workspace():
                         "priority": n_priority,
                         "area": n_area,
                         "detail": n_detail.strip(),
-                        "author": current_user,
+                        "author": f"{current_user} ({current_role})",
                         "status": "⏳ Chờ duyệt",
                         "time": get_vn_time()
                     })
@@ -386,7 +477,7 @@ def render_team_workspace():
                 "priority": "🟡 Trung bình",
                 "area": "Giao diện / Khác",
                 "detail": "Cho phép bấm nút lưu thẳng danh sách handle đối thủ mới thêm để lần sau mở app không phải gõ lại.",
-                "author": "Chị Phương",
+                "author": "Chị Phương (Sản xuất & Điều phối)",
                 "status": "⏳ Chờ duyệt",
                 "time": "Mẫu hệ thống"
             }
