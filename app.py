@@ -3,6 +3,8 @@ from googleapiclient.discovery import build
 from youtube_transcript_api import YouTubeTranscriptApi
 import pandas as pd
 import requests
+import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 st.set_page_config(page_title="Camxi - YouTube Market & Topic AI", layout="wide")
@@ -20,24 +22,47 @@ CN_MARKERS = [
     "hangzhou", "chongqing", "taobao", "temu", "chinese"
 ]
 
+TOPIC_RULES = [
+    ("Budget Makeover & Reset (Cải tạo & Làm mới tiết kiệm)", ["makeover", "reset", "under $", "$", "budget", "transform", "turn", "turning", "more like home", "feel like home", "feel cozy"]),
+    ("Deep Cleaning & Home Care (Dọn dẹp & Chăm sóc nhà)", ["clean", "cleaned", "cleaning", "empty", "organize", "organizing", "declutter", "tiring day", "smudging"]),
+    ("Local Market, Cooking & Food (Đi chợ, Nấu ăn & Chi phí sống)", ["market", "grocery", "walmart", "cooking", "cook", "meal", "meals", "what life costs", "shopping", "essentials"]),
+    ("Cozy Solo Living & ASMR (Sống một mình & Chữa lành)", ["alone", "solo", "quiet", "peaceful", "simple life", "cozy", "weekend", "daily life", "diary"])
+]
+
+def classify_topic(title):
+    t = title.lower()
+    matched = []
+    for label, keywords in TOPIC_RULES:
+        if any(k in t for k in keywords):
+            matched.append(label.split(" (")[0])
+    return " + ".join(matched[:2]) if matched else "General Solo Vlog"
+
+def extract_hooks(df):
+    prices = []
+    sizes = []
+    for title in df["Title"]:
+        prices.extend(re.findall(r"\$\d+", title))
+        sizes.extend(re.findall(r"\d+\s?m²|\d+\s?sqm|\d+\s?m2", title, flags=re.IGNORECASE))
+    return Counter(prices).most_common(8), Counter(sizes).most_common(8)
+
 def ask_gemini(api_key, prompt_text):
     models_to_try = ["gemini-3.8-flash-lite", "gemini-3.8-flash"]
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}]
     }
-    last_error = ""
+    errors = []
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=45)
+            response = requests.post(url, headers=headers, json=payload, timeout=(10, 60))
             if response.status_code == 200:
                 return response.json()["candidates"][0]["content"]["parts"][0]["text"]
-            last_error = f"({response.status_code}): {response.text}"
+            errors.append(f"{model_name} -> HTTP {response.status_code}: {response.text[:200]}")
         except Exception as e:
-            last_error = str(e)
-            continue
-    return f"⚠️ Hệ thống AI đang bận tạm thời, bạn bấm lại sau 10 giây nhé! Chi tiết: {last_error}"
+            errors.append(f"{model_name} -> {type(e).__name__}: {str(e)[:150]}")
+    return "⚠️ Kết nối Gemini API đang bị nghẽn từ máy chủ Google. Chi tiết kỹ thuật:\n- " + "\n- ".join(errors)
+
 def detect_origin(snippet):
     country_code = snippet.get("country", "").upper()
     text_blob = (
@@ -72,7 +97,7 @@ def resolve_channel_id(youtube, raw_input):
 with st.sidebar:
     st.header("API & Filter Settings")
     yt_key = st.text_input("YouTube API Key", value=default_yt_key, type="password")
-    gemini_key = st.text_input("Gemini API Key", value=default_gemini_key, type="password")
+    gemini_key = st.text_input("Gemini API Key (Optional)", value=default_gemini_key, type="password")
 
     st.subheader("1. Seed Channels (VN / CN)")
     default_competitors = (
@@ -177,11 +202,13 @@ if run_btn:
                         comments = int(v["statistics"].get("commentCount", 0))
                         subs = meta["subs"]
                         hours_live = max((now_utc - pub_dt).total_seconds() / 3600, 1)
+                        title_str = v["snippet"]["title"]
 
                         rows.append({
                             "Video ID": v["id"],
                             "Thumbnail": v["snippet"]["thumbnails"]["medium"]["url"],
-                            "Title": v["snippet"]["title"],
+                            "Title": title_str,
+                            "Topic Pillar": classify_topic(title_str),
                             "Channel": v["snippet"]["channelTitle"],
                             "Origin": origin if origin else "Other",
                             "Subscribers": subs,
@@ -206,7 +233,7 @@ if run_btn:
 
 if "market_df" in st.session_state:
     df = st.session_state["market_df"]
-    tab1, tab2 = st.tabs(["Top Videos Ranking", "AI Topic & Script Analyzer"])
+    tab1, tab2 = st.tabs(["Top Videos Ranking", "Topic Clusters & Script Analyzer"])
 
     with tab1:
         c1, c2, c3, c4 = st.columns(4)
@@ -215,8 +242,14 @@ if "market_df" in st.session_state:
         c3.metric("Max VPH", f"{df['VPH'].max():,} /h")
         c4.metric("Max Outlier", f"{df['Outlier (View/Sub)'].max()}x")
 
+        selected_pillar = st.selectbox(
+            "Filter by Topic Pillar:",
+            ["All Topics"] + sorted(df["Topic Pillar"].unique().tolist())
+        )
+        view_df = df if selected_pillar == "All Topics" else df[df["Topic Pillar"] == selected_pillar]
+
         st.dataframe(
-            df.drop(columns=["Video ID"]),
+            view_df.drop(columns=["Video ID"]),
             column_config={
                 "Thumbnail": st.column_config.ImageColumn("Thumbnail", width="medium"),
                 "Link": st.column_config.LinkColumn("Watch", display_text="Open")
@@ -226,73 +259,85 @@ if "market_df" in st.session_state:
         )
 
     with tab2:
-        if not gemini_key:
-            st.warning("Please enter your Gemini API Key in the sidebar or Secrets.")
-        else:
-            st.subheader("1. Macro Topic Trends (All Top Videos)")
-            if st.button("Analyze Market Topic Trends"):
-                with st.spinner("AI is clustering topics and identifying winning pillars..."):
+        st.subheader("1. Instant Topic Cluster Breakdown (Tự động phân nhóm 0.1s)")
+        cluster_df = (
+            df.groupby("Topic Pillar", as_index=False)
+            .agg(
+                Video_Count=("Video ID", "count"),
+                Total_Views=("Views", "sum"),
+                Avg_Views=("Views", "mean"),
+                Avg_Outlier=("Outlier (View/Sub)", "mean"),
+                Max_VPH=("VPH", "max")
+            )
+            .sort_values(by="Total_Views", ascending=False)
+        )
+        cluster_df["Avg_Views"] = cluster_df["Avg_Views"].round(0).astype(int)
+        cluster_df["Avg_Outlier"] = cluster_df["Avg_Outlier"].round(2)
+        st.dataframe(cluster_df, use_container_width=True)
+
+        prices, sizes = extract_hooks(df)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**Con số chi phí xuất hiện nhiều trong tiêu đề:**")
+            st.write(", ".join([f"{k} ({v} vid)" for k, v in prices]) if prices else "Không có số tiền cụ thể")
+        with col_b:
+            st.markdown("**Diện tích căn hộ xuất hiện nhiều trong tiêu đề:**")
+            st.write(", ".join([f"{k} ({v} vid)" for k, v in sizes]) if sizes else "Không ghi diện tích cụ thể")
+
+        if gemini_key:
+            if st.button("✨ Gọi Gemini AI Viết 5 Tiêu Đề Đề Xuất (Tùy chọn)"):
+                with st.spinner("Đang kết nối Gemini AI..."):
                     titles_summary = "\n".join([
-                        f"- {r['Title']} | Channel: {r['Channel']} | Views: {r['Views']:,} | Outlier: {r['Outlier (View/Sub)']}x"
-                        for _, r in df.iterrows()
+                        f"- {r['Title']} | Views: {r['Views']:,} | Outlier: {r['Outlier (View/Sub)']}x"
+                        for _, r in df.head(15).iterrows()
                     ])
                     prompt_macro = (
-                        "Analyze these recent YouTube videos from Vietnamese and Chinese creators targeting US viewers in the solo living / tiny apartment / budget makeover niche:\n"
+                        "Dựa trên danh sách video YouTube ngách sống độc lập / cải tạo căn hộ nhỏ sau đây:\n"
                         + titles_summary +
-                        "\n\nRespond in Vietnamese with 3 clear sections:\n"
-                        "1. Gom nhóm thành 3-5 Trụ cột chủ đề (Content Pillars) đang kéo view tốt nhất tuần này và lý do hiệu quả.\n"
-                        "2. Trích xuất các từ khóa, con số và ngòi nổ tâm lý (Triggers) đắt giá trong tiêu đề có hệ số Outlier cao.\n"
-                        "3. Đề xuất 5 ý tưởng tiêu đề tiếng Anh (kèm dịch tiếng Việt) tối ưu nhất để quay ngay cho kênh Chuc Nguyen's Little Life."
+                        "\n\nHãy viết bằng tiếng Việt ngắn gọn: (1) 3 insight đắt giá nhất từ tiêu đề và (2) 5 tiêu đề tiếng Anh kèm dịch tiếng Việt tối ưu cho kênh Chuc Nguyen's Little Life."
                     )
                     st.session_state["macro_result"] = ask_gemini(gemini_key, prompt_macro)
 
             if "macro_result" in st.session_state:
                 st.markdown(st.session_state["macro_result"])
 
-            st.divider()
+        st.divider()
 
-            st.subheader("2. Deep-Dive Script & Audience Comment Analysis")
-            video_options = {f"Top {r['Top']}: {r['Title']} ({r['Views']:,} views)": r["Video ID"] for _, r in df.iterrows()}
-            selected_label = st.selectbox("Select a video to analyze:", list(video_options.keys()))
-            selected_vid_id = video_options[selected_label]
+        st.subheader("2. Video Script & Audience Comment Extractor (Tải phụ đề & Top bình luận)")
+        video_options = {f"Top {r['Top']}: {r['Title']} ({r['Views']:,} views)": r["Video ID"] for _, r in df.iterrows()}
+        selected_label = st.selectbox("Select a video to inspect:", list(video_options.keys()))
+        selected_vid_id = video_options[selected_label]
 
-            if st.button("Analyze Selected Video (Transcript + Comments)"):
-                with st.spinner("Fetching transcript, comments, and analyzing structure..."):
-                    transcript_text = ""
-                    try:
-                        ytt_api = YouTubeTranscriptApi()
-                        transcript_list = ytt_api.fetch(selected_vid_id)
-                        transcript_text = " ".join([t.text for t in transcript_list])[:12000]
-                    except Exception:
-                        transcript_text = "(No transcript available / Silent ASMR vlog)."
+        if st.button("🔍 Tải Phụ Đề & Top Bình Luận Khán Giả Mỹ"):
+            with st.spinner("Đang tải dữ liệu trực tiếp từ YouTube..."):
+                transcript_text = ""
+                try:
+                    ytt_api = YouTubeTranscriptApi()
+                    transcript_list = ytt_api.fetch(selected_vid_id)
+                    transcript_text = " ".join([t.text for t in transcript_list])[:12000]
+                except Exception:
+                    transcript_text = "(Video này không bật phụ đề thoại / Vlog ASMR không lời)."
 
-                    comments_text = ""
-                    try:
-                        youtube = build("youtube", "v3", developerKey=yt_key)
-                        c_res = youtube.commentThreads().list(
-                            part="snippet", videoId=selected_vid_id,
-                            order="relevance", maxResults=30
-                        ).execute()
-                        comments_list = [
-                            item["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
-                            for item in c_res.get("items", [])
-                        ]
-                        comments_text = "\n- ".join(comments_list)
-                    except Exception:
-                        comments_text = "(Comments disabled)."
+                comments_list = []
+                try:
+                    youtube = build("youtube", "v3", developerKey=yt_key)
+                    c_res = youtube.commentThreads().list(
+                        part="snippet", videoId=selected_vid_id,
+                        order="relevance", maxResults=25
+                    ).execute()
+                    comments_list = [
+                        item["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
+                        for item in c_res.get("items", [])
+                    ]
+                except Exception:
+                    comments_list = ["(Video tắt bình luận)."]
 
-                    prompt_micro = (
-                        f"Analyze this YouTube video for Chuc Nguyen's Little Life production team:\n"
-                        f"- Title: {selected_label}\n"
-                        f"- Transcript: {transcript_text}\n"
-                        f"- Top US Viewer Comments: {comments_text}\n\n"
-                        "Respond in Vietnamese with 4 clear sections:\n"
-                        "1. Cấu trúc & Nhịp điệu kịch bản (bố cục các phần, cách mở đầu Hook giữ chân người xem).\n"
-                        "2. Yếu tố tâm lý & ASMR thị giác khiến khán giả Mỹ bị cuốn hút.\n"
-                        "3. Insight từ bình luận khán giả (họ khen gì nhất và muốn xem gì tiếp theo).\n"
-                        "4. Gợi ý bố cục 4 phần cụ thể để quay phiên bản hay hơn tại Việt Nam."
-                    )
-                    st.session_state["micro_result"] = ask_gemini(gemini_key, prompt_micro)
+                st.session_state["raw_transcript"] = transcript_text
+                st.session_state["raw_comments"] = comments_list
 
-            if "micro_result" in st.session_state:
-                st.markdown(st.session_state["micro_result"])
+        if "raw_transcript" in st.session_state:
+            with st.expander("📄 Toàn văn phụ đề video (Transcript)", expanded=True):
+                st.write(st.session_state["raw_transcript"])
+            with st.expander("💬 Top bình luận nổi bật từ khán giả", expanded=True):
+                for idx, cmt in enumerate(st.session_state["raw_comments"], 1):
+                    st.markdown(f"**{idx}.** {cmt}")
