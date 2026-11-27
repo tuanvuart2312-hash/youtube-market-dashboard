@@ -28,16 +28,22 @@ PRESENCE_FILE = "camxi_online_presence.json"
 ONLINE_TIMEOUT_SECONDS = 25
 
 DEFAULT_SHARED_EMAILS = [
-    "phuong.camxi@gmail.com",
-    "vu.camxi@gmail.com",
-    "linh.camxi@gmail.com",
-    "canh.camxi@gmail.com",
-    "thao.camxi@gmail.com",
-    "long.camxi@gmail.com",
-    "chuc.camxi@gmail.com",
-    "dong.camxi@gmail.com",
-    "my.camxi@gmail.com"
+    "tuanvu.art2312@gmail.com",
+    "long.nguyen20070724@gmail.com",
+    "nphphuong1201@gmail.com",
+    "phuongthaocassie@gmail.com",
+    "nguyenngoclinh14092000@gmail.com",
+    "lethitramy090702@gmail.com",
+    "hadinhcanh18052004@gmail.com",
+    "trdong196@gmail.com",
+    "hadinhcanh18052000@gmail.com",
+    "lothenam@gmail.com"
 ]
+
+ADMIN_EMAILS = {
+    "nphphuong1201@gmail.com",
+    "tuanvu.art2312@gmail.com"
+}
 
 def load_json_data(filepath, default_data):
     if os.path.exists(filepath):
@@ -400,7 +406,7 @@ def render_team_chat(current_email, enable_sound_alert=True):
     default_msgs = [
         {
             "id": 1001,
-            "sender": DEFAULT_SHARED_EMAILS[0],
+            "sender": "nphphuong1201@gmail.com",
             "tag": "📢 Thông báo",
             "text": "Chào mọi người! Mỗi người đăng nhập đúng email chia sẻ trang tính của mình để chat và gửi đề xuất update nhé.",
             "time": "Hệ thống"
@@ -494,31 +500,49 @@ def render_team_chat(current_email, enable_sound_alert=True):
 def render_team_workspace():
     st.subheader("💬 Không Gian Thảo Luận & Đề Xuất Update Phiên Bản Mới")
 
-    with st.expander("📧 Danh sách email được chia sẻ trang tính", expanded=False):
-        raw_emails_input = st.text_area(
-            "Dán danh sách email được chia sẻ trang tính (mỗi email 1 dòng hoặc cách nhau bởi dấu phẩy):",
-            value="\n".join(DEFAULT_SHARED_EMAILS),
-            height=130
-        )
-
-    shared_emails = parse_email_list(raw_emails_input)
-    if not shared_emails:
-        shared_emails = DEFAULT_SHARED_EMAILS
-
     if "verified_mail_session" not in st.session_state:
         st.session_state["verified_mail_session"] = None
 
+    if "locked_shared_emails" not in st.session_state:
+        st.session_state["locked_shared_emails"] = list(DEFAULT_SHARED_EMAILS)
+
     verified_email = st.session_state.get("verified_mail_session")
+    is_page_admin = (verified_email in ADMIN_EMAILS)
+
+    with st.expander("📧 Danh sách email được chia sẻ trang tính (Khóa — Chỉ quản lý trang chỉnh được)", expanded=False):
+        st.caption("🔒 Mục này đang được khóa cho quản lý trang.")
+        for idx_em, em_item in enumerate(st.session_state["locked_shared_emails"], 1):
+            st.markdown(f"`{idx_em:02d}.` **{em_item}**")
+
+        if is_page_admin:
+            st.divider()
+            st.markdown("**🛠️ Chỉnh sửa danh sách email (Quyền quản lý trang):**")
+            admin_raw_emails = st.text_area(
+                "Cập nhật danh sách email (mỗi email 1 dòng):",
+                value="\n".join(st.session_state["locked_shared_emails"]),
+                height=160,
+                key="admin_shared_emails_editor"
+            )
+            if st.button("💾 Lưu Danh Sách Email Mới", type="primary"):
+                parsed_new = parse_email_list(admin_raw_emails)
+                if parsed_new:
+                    st.session_state["locked_shared_emails"] = parsed_new
+                    st.success("Đã cập nhật danh sách email thành công!")
+                    st.rerun()
+                else:
+                    st.error("Danh sách email không hợp lệ!")
+
+    shared_emails = st.session_state["locked_shared_emails"]
 
     if not verified_email:
         st.markdown("### 🔐 Xác Thực Email Chia Sẻ Trang Tính Trước Khi Chat")
-        st.caption("Mỗi người nhập đúng email trang tính của mình và xác nhận mã xác thực (hoặc mã riêng của mail) để tránh chọn nhầm hoặc mạo danh email người khác.")
+        st.caption("Mỗi người nhập đúng email trang tính của mình và xác nhận mã xác thực để tránh chọn nhầm hoặc mạo danh email người khác.")
 
         v_col1, v_col2, v_col3 = st.columns([1.8, 1.5, 1.2])
         with v_col1:
             input_mail = st.text_input(
                 "Email chia sẻ trang tính của bạn *",
-                placeholder="ví dụ: tenban@gmail.com",
+                placeholder="ví dụ: nphphuong1201@gmail.com",
                 key="login_mail_input"
             )
         with v_col2:
@@ -540,7 +564,7 @@ def render_team_workspace():
             if not clean_candidate or "@" not in clean_candidate or "." not in clean_candidate.split("@")[-1]:
                 st.error("⚠️ Vui lòng nhập địa chỉ email hợp lệ!")
             elif clean_candidate not in shared_emails:
-                st.error("⚠️ Email này chưa có trong danh sách email được chia sẻ trang tính! Hãy kiểm tra lại danh sách email ở mục phía trên.")
+                st.error("⚠️ Email này chưa có trong danh sách email được chia sẻ trang tính!")
             elif entered_code.strip().upper() != make_mail_passcode(clean_candidate):
                 st.error("⚠️ Mã xác thực không khớp với email đã nhập! Hãy nhập đúng mã xác thực hiển thị cho email đó.")
             else:
@@ -553,7 +577,8 @@ def render_team_workspace():
     current_email = verified_email
     u_col1, u_col2, u_col3 = st.columns([2.4, 1.2, 1.0])
     with u_col1:
-        st.success(f"✅ Đã xác thực email: **{current_email}**")
+        role_badge = " (Quản lý trang)" if is_page_admin else ""
+        st.success(f"✅ Đã xác thực email: **{current_email}**{role_badge}")
     with u_col2:
         sound_alert = st.toggle("🔊 Chuông & Banner báo tin", value=True)
     with u_col3:
@@ -608,7 +633,7 @@ def render_team_workspace():
                 "priority": "🟡 Trung bình",
                 "area": "Giao diện / Khác",
                 "detail": "Cho phép bấm nút lưu thẳng danh sách handle đối thủ mới thêm để lần sau mở app không phải gõ lại.",
-                "author": DEFAULT_SHARED_EMAILS[0],
+                "author": "nphphuong1201@gmail.com",
                 "status": "⏳ Chờ duyệt",
                 "time": "Mẫu hệ thống"
             }
